@@ -1,0 +1,422 @@
+pub mod code;
+pub mod config;
+pub mod engine;
+pub mod ffi;
+pub mod format;
+pub mod mmap_buf;
+pub mod typo;
+pub mod user_data;
+
+#[cfg(test)]
+mod tests {
+    use crate::code::{compose_phrase_code, expand_wildcards, PackedCode, PackedPinyin, Stem2};
+    use crate::config::{FourthEmptyBehavior, WubiConfig, WubiSchema};
+    use crate::engine::{CandidateBadge, WubiEngine, KEY_SPACE};
+    use crate::format::{
+        serialize_wbaux, serialize_wbdict, AuxBuildInput, AuxView, CharMeta, DictBuildInput,
+        DictView, ENTRY_FLAG_SINGLE_CHAR,
+    };
+
+    fn build_sample_dict_86() -> DictView {
+        let entries = vec![
+            (
+                PackedCode::from_ascii("q").unwrap(),
+                "我".to_string(),
+                2_200_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("trnt").unwrap(),
+                "我".to_string(),
+                500_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("w").unwrap(),
+                "人".to_string(),
+                2_000_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("wu").unwrap(),
+                "们".to_string(),
+                900_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("wun").unwrap(),
+                "们".to_string(),
+                500_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("trwu").unwrap(),
+                "我们".to_string(),
+                1_800_000_000,
+                0,
+            ),
+            (
+                PackedCode::from_ascii("l").unwrap(),
+                "国".to_string(),
+                800_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("lgyi").unwrap(),
+                "国".to_string(),
+                500_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("lgyi").unwrap(),
+                "囗".to_string(),
+                10_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("lwgl").unwrap(),
+                "输入".to_string(),
+                650_000_000,
+                0,
+            ),
+            (
+                PackedCode::from_ascii("ifcy").unwrap(),
+                "法".to_string(),
+                750_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("ufcy").unwrap(),
+                "䇂".to_string(),
+                8_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("swfh").unwrap(),
+                "棱".to_string(),
+                30_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("qujq").unwrap(),
+                "镜".to_string(),
+                60_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+        ];
+        let char_metas = vec![
+            CharMeta {
+                codepoint: '我' as u32,
+                stem2: Stem2::from_bytes(b"tr").unwrap(),
+                flags: 0,
+                shortest_code: PackedCode::from_ascii("q").unwrap(),
+                primary_short_code: PackedCode::EMPTY,
+                full_code: PackedCode::from_ascii("trnt").unwrap(),
+            },
+            CharMeta {
+                codepoint: '们' as u32,
+                stem2: Stem2::from_bytes(b"wu").unwrap(),
+                flags: 0,
+                shortest_code: PackedCode::from_ascii("wu").unwrap(),
+                primary_short_code: PackedCode::EMPTY,
+                full_code: PackedCode::from_ascii("wun").unwrap(),
+            },
+            CharMeta {
+                codepoint: '国' as u32,
+                stem2: Stem2::from_bytes(b"lg").unwrap(),
+                flags: 0,
+                shortest_code: PackedCode::from_ascii("l").unwrap(),
+                primary_short_code: PackedCode::EMPTY,
+                full_code: PackedCode::from_ascii("lgyi").unwrap(),
+            },
+            CharMeta {
+                codepoint: '法' as u32,
+                stem2: Stem2::from_bytes(b"if").unwrap(),
+                flags: 0,
+                shortest_code: PackedCode::from_ascii("ifcy").unwrap(),
+                primary_short_code: PackedCode::EMPTY,
+                full_code: PackedCode::from_ascii("ifcy").unwrap(),
+            },
+            CharMeta {
+                codepoint: '棱' as u32,
+                stem2: Stem2::from_bytes(b"sw").unwrap(),
+                flags: 0,
+                shortest_code: PackedCode::from_ascii("swfh").unwrap(),
+                primary_short_code: PackedCode::EMPTY,
+                full_code: PackedCode::from_ascii("swfh").unwrap(),
+            },
+            CharMeta {
+                codepoint: '镜' as u32,
+                stem2: Stem2::from_bytes(b"qu").unwrap(),
+                flags: 0,
+                shortest_code: PackedCode::from_ascii("qujq").unwrap(),
+                primary_short_code: PackedCode::EMPTY,
+                full_code: PackedCode::from_ascii("qujq").unwrap(),
+            },
+        ];
+        let bytes = serialize_wbdict(DictBuildInput {
+            schema_id: 86,
+            entries,
+            char_metas,
+        });
+        DictView::from_bytes(bytes).unwrap()
+    }
+
+    fn build_sample_dict_98() -> DictView {
+        // In 98 Wubi, 镜 has different radical code `q...` -> say `qujq` vs `棱` `swfh` -> let's give 镜 `qpjq` in 98 to test cross-schema re-encoding!
+        let entries = vec![
+            (
+                PackedCode::from_ascii("swfh").unwrap(),
+                "棱".to_string(),
+                30_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("qpjq").unwrap(),
+                "镜".to_string(),
+                60_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+        ];
+        let char_metas = vec![
+            CharMeta {
+                codepoint: '棱' as u32,
+                stem2: Stem2::from_bytes(b"sw").unwrap(),
+                flags: 0,
+                shortest_code: PackedCode::from_ascii("swfh").unwrap(),
+                primary_short_code: PackedCode::EMPTY,
+                full_code: PackedCode::from_ascii("swfh").unwrap(),
+            },
+            CharMeta {
+                codepoint: '镜' as u32,
+                stem2: Stem2::from_bytes(b"qp").unwrap(),
+                flags: 0,
+                shortest_code: PackedCode::from_ascii("qpjq").unwrap(),
+                primary_short_code: PackedCode::EMPTY,
+                full_code: PackedCode::from_ascii("qpjq").unwrap(),
+            },
+        ];
+        DictView::from_bytes(serialize_wbdict(DictBuildInput {
+            schema_id: 98,
+            entries,
+            char_metas,
+        }))
+        .unwrap()
+    }
+
+    fn build_sample_aux() -> AuxView {
+        let pinyin_items = vec![
+            (
+                PackedPinyin::from_bytes(b"guo").unwrap(),
+                "guó".to_string(),
+                '国' as u32,
+                800_000,
+            ),
+            (
+                PackedPinyin::from_bytes(b"wo").unwrap(),
+                "wǒ".to_string(),
+                '我' as u32,
+                900_000,
+            ),
+        ];
+        // Strong corpus bigram: '入' -> '法' (`boost = 3.5` nats => `3.5 * 256 = 896`)
+        let pair_key = (('入' as u64) << 32) | ('法' as u64);
+        let bigrams = vec![(pair_key, 896u16)];
+        AuxView::from_bytes(serialize_wbaux(AuxBuildInput {
+            pinyin_items,
+            bigrams,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn packed_code_order_and_prefix() {
+        let a = PackedCode::from_ascii("a").unwrap();
+        let aa = PackedCode::from_ascii("aa").unwrap();
+        let aazz = PackedCode::from_ascii("aazz").unwrap();
+        let ab = PackedCode::from_ascii("ab").unwrap();
+        assert!(a < aa && aa < aazz && aazz < ab);
+        let (lo, hi) = aa.prefix_range();
+        assert!(aazz >= lo && aazz <= hi);
+        assert!(ab > hi);
+
+        let phrase = compose_phrase_code(&[
+            Stem2::from_bytes(b"tr").unwrap(),
+            Stem2::from_bytes(b"wu").unwrap(),
+        ])
+        .unwrap();
+        assert_eq!(phrase.as_string(), "trwu");
+        assert_eq!(expand_wildcards(b"trzt").len(), 25);
+    }
+
+    #[test]
+    fn four_code_auto_commit_and_fifth_push() {
+        let mut engine = WubiEngine::new(WubiConfig::default());
+        engine.load_dict(WubiSchema::Wubi86, build_sample_dict_86());
+
+        // `trwu` ("我们") is unique at 4 codes -> auto-commits immediately on 'u'!
+        for ch in ['t', 'r', 'w'] {
+            let out = engine.handle_key_event(0, Some(ch), false, 100);
+            assert!(out.commit_text.is_empty());
+        }
+        let out4 = engine.handle_key_event(0, Some('u'), false, 110);
+        assert_eq!(out4.commit_text, "我们");
+        assert!(!engine.is_composing());
+
+        // `lgyi` has 2 candidates ("国", "囗") -> stays open on 4th code, then 5th key `'q'` pushes "国"!
+        for ch in ['l', 'g', 'y', 'i'] {
+            let out = engine.handle_key_event(0, Some(ch), false, 200);
+            assert!(out.commit_text.is_empty());
+        }
+        assert_eq!(engine.page_candidates()[0].text, "国");
+        assert_eq!(engine.page_candidates()[0].comment, "⚡l");
+
+        // Strict shortcode ("出简不出全"): when enabled, "国" (which is #1 at `l`) demotes behind "囗" at `lgyi`!
+        let mut cfg = engine.config.clone();
+        cfg.strict_shortcode = true;
+        engine.set_config(cfg);
+        assert_eq!(engine.page_candidates()[0].text, "囗");
+        cfg = engine.config.clone();
+        cfg.strict_shortcode = false;
+        engine.set_config(cfg);
+
+        // 5th key `'q'` pushes "国" and begins composing `"q"` ("我")
+        let out5 = engine.handle_key_event(0, Some('q'), false, 250);
+        assert_eq!(out5.commit_text, "国");
+        assert_eq!(out5.preedit, "q");
+        assert_eq!(engine.page_candidates()[0].text, "我");
+    }
+
+    #[test]
+    fn auto_phrase_and_cross_schema_switching() {
+        let mut cfg = WubiConfig::default();
+        cfg.auto_phrase = true;
+        cfg.auto_phrase_threshold = 2;
+        let mut engine = WubiEngine::new(cfg);
+        engine.load_dict(WubiSchema::Wubi86, build_sample_dict_86());
+        engine.load_dict(WubiSchema::Wubi98, build_sample_dict_98());
+
+        // Type "棱" (`swfh`) + "镜" (`qujq`) twice consecutively
+        for round in 0..2u64 {
+            let base_t = 1000 + round * 500;
+            for (i, ch) in ['s', 'w', 'f', 'h'].iter().enumerate() {
+                let _ = engine.handle_key_event(0, Some(*ch), false, base_t + i as u64 * 20);
+            }
+            let mut last_out = Default::default();
+            for (i, ch) in ['q', 'u', 'j', 'q'].iter().enumerate() {
+                last_out =
+                    engine.handle_key_event(0, Some(*ch), false, base_t + 100 + i as u64 * 20);
+            }
+            if round == 1 {
+                assert!(
+                    last_out.notice.contains("棱镜"),
+                    "expected auto-phrase notice, got: {}",
+                    last_out.notice
+                );
+            }
+        }
+
+        // Now in 86 Wubi, `swqu` immediately auto-commits "棱镜"!
+        for ch in ['s', 'w', 'q'] {
+            let _ = engine.handle_key_event(0, Some(ch), false, 3000);
+        }
+        let out86 = engine.handle_key_event(0, Some('u'), false, 3050);
+        assert_eq!(out86.commit_text, "棱镜");
+
+        // Switch to 98 Wubi! "棱镜" automatically re-indexes to 98 code `swqp`!
+        engine.set_schema(WubiSchema::Wubi98);
+        for ch in ['s', 'w', 'q'] {
+            let _ = engine.handle_key_event(0, Some(ch), false, 4000);
+        }
+        let out98 = engine.handle_key_event(0, Some('p'), false, 4050);
+        assert_eq!(out98.commit_text, "棱镜");
+    }
+
+    #[test]
+    fn z_pinyin_reverse_lookup_and_wildcard() {
+        let mut engine = WubiEngine::new(WubiConfig::default());
+        engine.load_dict(WubiSchema::Wubi86, build_sample_dict_86());
+        engine.set_aux(build_sample_aux());
+
+        for ch in ['z', 'g', 'u', 'o'] {
+            let _ = engine.handle_key_event(0, Some(ch), false, 100);
+        }
+        let cands = engine.page_candidates();
+        assert!(!cands.is_empty());
+        assert_eq!(cands[0].text, "国");
+        assert_eq!(cands[0].badge, CandidateBadge::PinyinLookup);
+        assert!(cands[0].comment.contains("lgyi"));
+        engine.clear_composition();
+
+        // Wildcard `trzt` finds "我" (`trnt`)
+        for ch in ['t', 'r', 'z', 't'] {
+            let _ = engine.handle_key_event(0, Some(ch), false, 200);
+        }
+        assert_eq!(engine.page_candidates()[0].text, "我");
+        assert_eq!(engine.page_candidates()[0].comment, "trnt");
+    }
+
+    #[test]
+    fn touch_boundary_typo_rescue_bigram_and_adaptive_hitbox() {
+        let mut engine = WubiEngine::new(WubiConfig::default());
+        engine.load_dict(WubiSchema::Wubi86, build_sample_dict_86());
+        engine.set_aux(build_sample_aux());
+
+        // 1. Empty-code rescue on touchscreen: user aims for `trwu` ("我们"),
+        //    first tap slips right of `t` (4.0, 0.0) onto `y` border (4.55, 0.02) -> `yrwu` (empty!)
+        let _ = engine.push_touch_letter(b'y', 4.55, 0.02, true, 1000);
+        let _ = engine.push_touch_letter(b'r', 3.00, 0.00, true, 1080);
+        let _ = engine.push_touch_letter(b'w', 1.00, 0.00, true, 1160);
+        let out = engine.push_touch_letter(b'u', 6.00, 0.00, true, 1240);
+        // Because `suppress_auto_commit_on_correction = true` by default, it rescues to #1 without blind auto-commit!
+        assert!(out.commit_text.is_empty());
+        assert_eq!(engine.page_candidates()[0].text, "我们");
+        assert_eq!(engine.page_candidates()[0].badge, CandidateBadge::TypoCorrected);
+        assert!(engine.page_candidates()[0].confidence > 0.80);
+
+        // User confirms candidate #1 with Space -> triggers online touch-region calibration on `'t'`!
+        let commit_out = engine.handle_key_event(KEY_SPACE, Some(' '), false, 1300);
+        assert_eq!(commit_out.commit_text, "我们");
+        let (dx_t, _) = engine.user.touch_profile.offset_for(b't');
+        assert!(dx_t > 0.03, "expected positive rightward shift on 't', got {}", dx_t);
+
+        // 2. Contextual Bigram Disambiguation on boundary touch:
+        //    User first commits "输入" (`lwgl`), then wants "法" (`ifcy`).
+        //    `u` is at (6.0, 0.0), `i` is at (7.0, 0.0). User taps border at (6.46, 0.02) (slightly closer to `u`!),
+        //    where `ufcy` IS a real rare char `"䇂"`, while `ifcy` is `"法"` boosted by Bigram("入" -> "法")!
+        for ch in ['l', 'w', 'g', 'l'] {
+            let _ = engine.handle_key_event(0, Some(ch), false, 2000);
+        }
+        let _ = engine.push_touch_letter(b'u', 6.46, 0.02, true, 2200);
+        let _ = engine.push_touch_letter(b'f', 3.50, 1.00, true, 2260);
+        let _ = engine.push_touch_letter(b'c', 3.50, 2.00, true, 2320);
+        let _ = engine.push_touch_letter(b'y', 5.00, 0.00, true, 2380);
+        assert_eq!(
+            engine.page_candidates()[0].text,
+            "法",
+            "expected contextual bigram + boundary snap to promote 法 over rare 䇂"
+        );
+
+        // 3. Repeated systematic rightward thumb drift on `'t'` shifts its Voronoi boundary!
+        engine.clear_composition();
+        for i in 0..8 {
+            engine.user.touch_profile.observe(b't', 0.25, 0.0);
+            let _ = i;
+        }
+        // Now tapping at `x = 4.56` (past geometric midpoint 4.50 between T=4.0 and Y=5.0!) snaps directly to `'t'`!
+        let snapped = engine
+            .key_layout
+            .nearest_key(4.56, 0.0, &engine.user.touch_profile, true);
+        assert_eq!(snapped, b't');
+
+        // 4. Fourth-code truly empty block test (`zzzz`-free empty code `pppp`)
+        engine.clear_composition();
+        assert_eq!(engine.config.fourth_empty_behavior, FourthEmptyBehavior::Block);
+        for ch in ['p', 'p', 'p'] {
+            let _ = engine.handle_key_event(0, Some(ch), false, 3000);
+        }
+        let empty4 = engine.handle_key_event(0, Some('p'), false, 3050);
+        assert!(empty4.bell);
+        assert_eq!(empty4.preedit, "ppp");
+    }
+}

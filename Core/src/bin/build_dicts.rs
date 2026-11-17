@@ -1,0 +1,450 @@
+use std::collections::{HashMap, HashSet};
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use wubi_core::code::{PackedCode, PackedPinyin, Stem2};
+use wubi_core::format::{
+    serialize_wbaux, serialize_wbdict, AuxBuildInput, CharMeta, DictBuildInput,
+    ENTRY_FLAG_EXT_RARE, ENTRY_FLAG_SINGLE_CHAR, ENTRY_FLAG_SYMBOL,
+};
+
+fn strip_pinyin_tone(toned: &str) -> (String, Option<String>) {
+    let mut primary = String::with_capacity(toned.len());
+    let mut has_umlaut = false;
+    for ch in toned.chars() {
+        let mapped = match ch {
+            'ā' | 'á' | 'ǎ' | 'à' | 'a' => 'a',
+            'ē' | 'é' | 'ě' | 'è' | 'ê' | 'e' => 'e',
+            'ī' | 'í' | 'ǐ' | 'ì' | 'i' => 'i',
+            'ō' | 'ó' | 'ǒ' | 'ò' | 'o' => 'o',
+            'ū' | 'ú' | 'ǔ' | 'ù' | 'u' => 'u',
+            'ǖ' | 'ǘ' | 'ǚ' | 'ǜ' | 'ü' => {
+                has_umlaut = true;
+                'v'
+            }
+            'ń' | 'ň' | 'ǹ' | 'n' => 'n',
+            'ḿ' | 'm' => 'm',
+            c if c.is_ascii_lowercase() => c,
+            _ => continue,
+        };
+        primary.push(mapped);
+    }
+    let alt = if has_umlaut {
+        Some(primary.replace('v', "u"))
+    } else {
+        None
+    };
+    (primary, alt)
+}
+
+struct ParsedSchema {
+    entries: Vec<(PackedCode, String, u32, u16)>,
+    char_metas: Vec<CharMeta>,
+    char_weights: HashMap<u32, u64>,
+    phrase_weights: Vec<(String, u64)>,
+}
+
+fn parse_rime_dict(
+    path: &PathBuf,
+    schema_id: u32,
+    tghz_set: &HashSet<u32>,
+) -> ParsedSchema {
+    let content = fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
+
+    let mut raw_rows: Vec<(String, String, u64, Option<String>)> = Vec::new();
+    let mut max_wt = 0u64;
+    let mut in_body = false;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if !in_body {
+            if line == "..." {
+                in_body = true;
+            }
+            continue;
+        }
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let text = parts[0].trim();
+        let code_str = parts[1].trim();
+        if text.is_empty() || code_str.is_empty() || code_str.len() > 4 {
+            continue;
+        }
+        if !code_str.bytes().all(|b| b.is_ascii_lowercase()) {
+            continue;
+        }
+        let wt: u64 = parts
+            .get(2)
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(0);
+        if wt > max_wt {
+            max_wt = wt;
+        }
+        let stem = parts
+            .get(3)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        raw_rows.push((text.to_string(), code_str.to_string(), wt, stem));
+    }
+
+    // Normalize weight scale across schemas (e.g. wubi06 uses 0..20,000 while 86/98 use 0..4e9)
+    let scale: u64 = if max_wt > 0 && max_wt < 10_000_000 {
+        100_000
+    } else {
+        1
+    };
+
+    // Preserve file order tie-breaking within same bucket by adding tiny descending rank delta if needed
+    let mut entries = Vec::with_capacity(raw_rows.len());
+    let mut char_shortest: HashMap<u32, (PackedCode, u32)> = HashMap::new();
+    let mut char_full: HashMap<u32, (PackedCode, u32)> = HashMap::new();
+    let mut char_explicit_stem: HashMap<u32, Stem2> = HashMap::new();
+    let mut char_weights: HashMap<u32, u64> = HashMap::new();
+    let mut phrase_weights: Vec<(String, u64)> = Vec::new();
+
+    // Track per-code count to preserve exact file order when weights are equal
+    let mut per_code_seen: HashMap<PackedCode, u32> = HashMap::new();
+
+    for (text, code_str, raw_wt, stem_opt) in raw_rows {
+        let Some(pcode) = PackedCode::from_ascii(&code_str) else {
+            continue;
+        };
+        let seen_idx = per_code_seen.entry(pcode).or_insert(0);
+        let scaled = raw_wt.saturating_mul(scale);
+        let wt_u32 = scaled
+            .min(u32::MAX as u64 - 1000)
+            .saturating_add(500u64.saturating_sub(*seen_idx as u64)) as u32;
+        *seen_idx += 1;
+
+        let mut chars_it = text.chars();
+        let first_ch = chars_it.next().unwrap();
+        let is_single = chars_it.next().is_none();
+
+        let mut flags = 0u16;
+        if code_str.starts_with('z') {
+            flags |= ENTRY_FLAG_SYMBOL;
+        }
+        if is_single {
+            flags |= ENTRY_FLAG_SINGLE_CHAR;
+            let cp = first_ch as u32;
+            // Mark non-BMP characters outside 通用规范汉字表 as rare extension chars
+            if cp > 0xFFFF && !tghz_set.contains(&cp) {
+                flags |= ENTRY_FLAG_EXT_RARE;
+            }
+            if !code_str.contains('z') {
+                let cw = char_weights.entry(cp).or_insert(0);
+                if scaled > *cw {
+                    *cw = scaled;
+                }
+                if let Some(ref st) = stem_opt {
+                    if let Some(s2) = Stem2::from_bytes(st.as_bytes()) {
+                        char_explicit_stem.insert(cp, s2);
+                    }
+                }
+                char_shortest
+                    .entry(cp)
+                    .and_modify(|prev| {
+                        if pcode.len() < prev.0.len()
+                            || (pcode.len() == prev.0.len() && wt_u32 > prev.1)
+                        {
+                            *prev = (pcode, wt_u32);
+                        }
+                    })
+                    .or_insert((pcode, wt_u32));
+
+                char_full
+                    .entry(cp)
+                    .and_modify(|prev| {
+                        if pcode.len() > prev.0.len()
+                            || (pcode.len() == prev.0.len() && wt_u32 > prev.1)
+                        {
+                            *prev = (pcode, wt_u32);
+                        }
+                    })
+                    .or_insert((pcode, wt_u32));
+            }
+        } else if !code_str.contains('z') {
+            phrase_weights.push((text.clone(), scaled.max(1_000)));
+        }
+
+        entries.push((pcode, text, if raw_wt == 0 && (flags & ENTRY_FLAG_EXT_RARE) != 0 { 0 } else { wt_u32 }, flags));
+    }
+
+    let mut all_cps: HashSet<u32> = char_full.keys().copied().collect();
+    all_cps.extend(char_shortest.keys().copied());
+
+    let mut char_metas = Vec::with_capacity(all_cps.len());
+    for cp in all_cps {
+        let shortest = char_shortest.get(&cp).map(|x| x.0).unwrap_or_default();
+        let full = char_full.get(&cp).map(|x| x.0).unwrap_or(shortest);
+        let stem2 = char_explicit_stem.get(&cp).copied().unwrap_or_else(|| {
+            let (buf, n) = full.to_bytes_buf();
+            Stem2::from_bytes(&buf[..n]).unwrap_or_default()
+        });
+        let flags = if cp > 0xFFFF && !tghz_set.contains(&cp) {
+            ENTRY_FLAG_EXT_RARE
+        } else {
+            0
+        };
+        char_metas.push(CharMeta {
+            codepoint: cp,
+            stem2,
+            flags,
+            shortest_code: shortest,
+            primary_short_code: PackedCode::EMPTY,
+            full_code: full,
+        });
+    }
+
+    let _ = schema_id;
+    ParsedSchema {
+        entries,
+        char_metas,
+        char_weights,
+        phrase_weights,
+    }
+}
+
+fn load_tghz_set(pinyin_dir: &PathBuf) -> HashSet<u32> {
+    let mut set = HashSet::new();
+    let p = pinyin_dir.join("kTGHZ2013.txt");
+    if let Ok(content) = fs::read_to_string(p) {
+        for line in content.lines() {
+            let line = line.trim();
+            if !line.starts_with("U+") {
+                continue;
+            }
+            if let Some(colon) = line.find(':') {
+                if let Ok(cp) = u32::from_str_radix(&line[2..colon], 16) {
+                    set.insert(cp);
+                }
+            }
+        }
+    }
+    set
+}
+
+fn build_aux_data(
+    pinyin_dir: &PathBuf,
+    global_char_weights: &HashMap<u32, u64>,
+    all_phrases: &[(String, u64)],
+) -> AuxBuildInput {
+    // 1. Parse kTGHZ2013.txt + pinyin.txt (BMP + TGHZ characters)
+    let mut py_items = Vec::<(PackedPinyin, String, u32, u32)>::new();
+    for filename in ["kTGHZ2013.txt", "kMandarin_8105.txt", "pinyin.txt"] {
+        let path = pinyin_dir.join(filename);
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let is_core_std = filename != "pinyin.txt";
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if !line.starts_with("U+") {
+                continue;
+            }
+            let Some(colon) = line.find(':') else {
+                continue;
+            };
+            let Ok(cp) = u32::from_str_radix(&line[2..colon], 16) else {
+                continue;
+            };
+            if !is_core_std && cp > 0x9FFF {
+                continue;
+            }
+            let Some(&c_wt) = global_char_weights.get(&cp) else {
+                continue;
+            };
+            let rest = &line[colon + 1..];
+            let readings_part = match rest.find('#') {
+                Some(h) => &rest[..h],
+                None => rest,
+            }
+            .trim();
+
+            for (r_idx, reading) in readings_part.split(',').enumerate() {
+                let r = reading.trim();
+                if r.is_empty() {
+                    continue;
+                }
+                let (ascii_py, alt_u) = strip_pinyin_tone(r);
+                // Primary reading gets higher weight than rare secondary polyphone readings
+                let wt = ((c_wt / 1000).min(u32::MAX as u64 / 2) as u32)
+                    .saturating_add(if is_core_std { 50_000 } else { 0 })
+                    / ((r_idx as u32) + 1);
+                if let Some(pp) = PackedPinyin::from_bytes(ascii_py.as_bytes()) {
+                    py_items.push((pp, r.to_string(), cp, wt.max(1)));
+                }
+                if let Some(alt) = alt_u {
+                    if let Some(pp) = PackedPinyin::from_bytes(alt.as_bytes()) {
+                        py_items.push((pp, r.to_string(), cp, wt.max(1)));
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Build character-transition Bigram log-PMI table from weighted phrase corpus + conversational transitions!
+    let mut pair_mass: HashMap<u64, f64> = HashMap::new();
+    let mut left_mass: HashMap<u32, f64> = HashMap::new();
+    let mut right_mass: HashMap<u32, f64> = HashMap::new();
+    let mut total_mass = 0.0f64;
+
+    for (phrase, wt) in all_phrases {
+        let chars: Vec<char> = phrase.chars().collect();
+        if chars.len() < 2 {
+            continue;
+        }
+        // Dampen huge outliers with powf(0.65) so top 20 words don't drown all other transitions
+        let w = (*wt as f64).max(1000.0).powf(0.65);
+        for win in chars.windows(2) {
+            let c1 = win[0] as u32;
+            let c2 = win[1] as u32;
+            let key = ((c1 as u64) << 32) | (c2 as u64);
+            *pair_mass.entry(key).or_insert(0.0) += w;
+            *left_mass.entry(c1).or_insert(0.0) += w;
+            *right_mass.entry(c2).or_insert(0.0) += w;
+            total_mass += w;
+        }
+    }
+
+    // Inject curated high-frequency cross-word & conversational transitions
+    let conversational = [
+        ("输入法", 5e8),
+        ("五笔字型", 4e8),
+        ("误触纠正", 3e8),
+        ("苹果原生", 2e8),
+        ("没问题", 5e8),
+        ("不知道", 6e8),
+        ("为什么", 7e8),
+        ("怎么样", 5e8),
+        ("可以的", 4e8),
+        ("如果是", 3e8),
+        ("已经在", 3e8),
+        ("我是", 6e8),
+        ("我在", 5e8),
+        ("我想", 5e8),
+        ("我要", 4e8),
+        ("我会", 4e8),
+        ("我的", 8e8),
+        ("你的", 6e8),
+        ("他的", 5e8),
+        ("不是", 8e8),
+        ("不会", 6e8),
+        ("不能", 6e8),
+        ("不要", 5e8),
+        ("这个", 7e8),
+        ("这是", 7e8),
+        ("这样", 5e8),
+        ("这里", 5e8),
+    ];
+    for (p, raw_w) in conversational {
+        let w = (raw_w as f64).powf(0.65);
+        let chars: Vec<char> = p.chars().collect();
+        for win in chars.windows(2) {
+            let c1 = win[0] as u32;
+            let c2 = win[1] as u32;
+            let key = ((c1 as u64) << 32) | (c2 as u64);
+            *pair_mass.entry(key).or_insert(0.0) += w;
+            *left_mass.entry(c1).or_insert(0.0) += w;
+            *right_mass.entry(c2).or_insert(0.0) += w;
+            total_mass += w;
+        }
+    }
+
+    let mut scored_bigrams = Vec::<(u64, f64, u16)>::new();
+    for (key, pm) in pair_mass {
+        let c1 = (key >> 32) as u32;
+        let c2 = (key & 0xFFFF_FFFF) as u32;
+        let lm = left_mass.get(&c1).copied().unwrap_or(1.0);
+        let rm = right_mass.get(&c2).copied().unwrap_or(1.0);
+        // Smoothed PMI + conditional probability blend
+        let p_cond = pm / (lm + 500.0);
+        let p_marg = (rm + 100.0) / (total_mass + 10_000.0);
+        let pmi = (p_cond / p_marg.max(1e-9)).ln();
+        if pmi > 0.8 && pm > 150.0 {
+            let boost = (pmi * 0.48).clamp(0.35, 4.20);
+            let q8 = (boost * 256.0).round() as u16;
+            scored_bigrams.push((key, pm * pmi, q8));
+        }
+    }
+    scored_bigrams.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
+    scored_bigrams.truncate(55_000);
+
+    let bigrams = scored_bigrams.into_iter().map(|(k, _, q)| (k, q)).collect();
+    AuxBuildInput {
+        pinyin_items: py_items,
+        bigrams,
+    }
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 3 {
+        eprintln!("Usage: build-dicts <raw-tables-dir> <output-dicts-dir>");
+        std::process::exit(1);
+    }
+    let raw_dir = PathBuf::from(&args[1]);
+    let out_dir = PathBuf::from(&args[2]);
+    fs::create_dir_all(&out_dir).expect("failed to create output dir");
+
+    let pinyin_dir = raw_dir.join("pinyin");
+    let tghz_set = load_tghz_set(&pinyin_dir);
+    println!("Loaded {} standard TGHZ-2013 characters", tghz_set.len());
+
+    let specs = [
+        (86u32, "wubi86/wubi86.dict.yaml", "wubi86.wbdict"),
+        (98u32, "wubi98/wubi98.dict.yaml", "wubi98.wbdict"),
+        (6u32, "wubi06/wubi06.dict.yaml", "wubi06.wbdict"),
+    ];
+
+    let mut global_char_weights = HashMap::<u32, u64>::new();
+    let mut all_phrases = Vec::<(String, u64)>::new();
+
+    for (schema_id, rel_in, out_name) in specs {
+        let in_path = raw_dir.join(rel_in);
+        let parsed = parse_rime_dict(&in_path, schema_id, &tghz_set);
+        for (cp, wt) in &parsed.char_weights {
+            let e = global_char_weights.entry(*cp).or_insert(0);
+            if *wt > *e {
+                *e = *wt;
+            }
+        }
+        all_phrases.extend(parsed.phrase_weights);
+
+        let entry_cnt = parsed.entries.len();
+        let char_cnt = parsed.char_metas.len();
+        let blob = serialize_wbdict(DictBuildInput {
+            schema_id,
+            entries: parsed.entries,
+            char_metas: parsed.char_metas,
+        });
+        let out_path = out_dir.join(out_name);
+        fs::write(&out_path, &blob).expect("failed to write wbdict");
+        println!(
+            "Built {} ({:.2} MB): {} entries, {} chars",
+            out_name,
+            blob.len() as f64 / (1024.0 * 1024.0),
+            entry_cnt,
+            char_cnt
+        );
+    }
+
+    let aux_input = build_aux_data(&pinyin_dir, &global_char_weights, &all_phrases);
+    let py_cnt = aux_input.pinyin_items.len();
+    let bg_cnt = aux_input.bigrams.len();
+    let aux_blob = serialize_wbaux(aux_input);
+    let aux_path = out_dir.join("wubi_aux.wbaux");
+    fs::write(&aux_path, &aux_blob).expect("failed to write wbaux");
+    println!(
+        "Built wubi_aux.wbaux ({:.2} MB): {} pinyin mappings, {} bigrams",
+        aux_blob.len() as f64 / (1024.0 * 1024.0),
+        py_cnt,
+        bg_cnt
+    );
+}
