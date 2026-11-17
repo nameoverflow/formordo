@@ -56,6 +56,7 @@ public final class KeyboardViewController: UIInputViewController {
     private func setupViews() {
         guard let inputView = self.inputView else { return }
         inputView.allowsSelfSizing = true
+        inputView.clipsToBounds = false
 
         glassBackdrop.translatesAutoresizingMaskIntoConstraints = false
         glassBackdrop.layer.cornerRadius = IOSKeyboardLayoutEngine.trayTopCornerRadius

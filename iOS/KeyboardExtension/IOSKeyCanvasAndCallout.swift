@@ -1,11 +1,7 @@
 #if os(iOS)
 import UIKit
 
-/// Hardware-accelerated iOS 26 ("Liquid Glass") native 4-row keyboard canvas:
-/// - Uniform white (`#FFFFFF`) 8.5pt continuous-corner keycaps in Light mode, uniform `#47474B` in Dark mode
-/// - Lowercase SF Pro Regular letter legends, crisp `1.6pt` stroke SF Symbols (`shift`, `delete.backward`, `return.left`)
-/// - Clean Spacebar with subtle bottom-right `"五"` subscript
-/// - Continuous Voronoi hit-testing & horizontal Spacebar cursor trackpad
+/// Hardware-accelerated iOS 26 ("Liquid Glass") native 4-row keyboard canvas.
 final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     var enableInputClicksWhenVisible: Bool { true }
 
@@ -52,9 +48,10 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         let keyFill = isDark
             ? UIColor(red: 0.28, green: 0.28, blue: 0.30, alpha: 1.0)
             : UIColor.white
+        // Depressed keycap fill matching IMG_2628 (`h` slot subtly recessed relative to surrounding white keys)
         let pressedFill = isDark
-            ? UIColor(red: 0.38, green: 0.38, blue: 0.41, alpha: 1.0)
-            : UIColor(red: 0.91, green: 0.92, blue: 0.94, alpha: 1.0)
+            ? UIColor(red: 0.20, green: 0.20, blue: 0.22, alpha: 1.0)
+            : UIColor(red: 219.0 / 255.0, green: 220.0 / 255.0, blue: 224.0 / 255.0, alpha: 1.0)
         let labelColor = isDark ? UIColor.white : UIColor.black
         let subscriptColor = isDark
             ? UIColor(white: 1.0, alpha: 0.40)
@@ -74,11 +71,13 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
 
             let path = UIBezierPath(roundedRect: spec.frame, cornerRadius: corner)
             ctx.saveGState()
-            ctx.setShadow(
-                offset: CGSize(width: 0, height: 0.5),
-                blur: 0.6,
-                color: UIColor.black.withAlphaComponent(isDark ? 0.24 : 0.04).cgColor
-            )
+            if !isPressed {
+                ctx.setShadow(
+                    offset: CGSize(width: 0, height: 0.5),
+                    blur: 0.6,
+                    color: UIColor.black.withAlphaComponent(isDark ? 0.24 : 0.04).cgColor
+                )
+            }
             fill.setFill()
             path.fill()
             ctx.restoreGState()
@@ -134,7 +133,6 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 ns.draw(at: pt, withAttributes: attrs)
             }
 
-            // Subtle bottom-right corner tag (`"五"` / `"EN"`) on Spacebar matching iOS 26 native Wubi!
             if let sub = spec.cornerSubscript, !sub.isEmpty {
                 let subAttrs: [NSAttributedString.Key: Any] = [
                     .font: UIFont.systemFont(ofSize: 11.5, weight: .regular),
@@ -163,14 +161,12 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
             setNeedsDisplay()
             onKeyTouchDown?(hit)
 
-            if hit.kind == .modeToggle || hit.kind == .space {
-                if hit.kind == .modeToggle {
-                    modeLongPressTimer = Timer.scheduledTimer(withTimeInterval: 0.42, repeats: false) { [weak self] _ in
-                        Task { @MainActor in
-                            guard let self else { return }
-                            self.didTriggerLongPress = true
-                            self.onModeKeyLongPress?()
-                        }
+            if hit.kind == .modeToggle {
+                modeLongPressTimer = Timer.scheduledTimer(withTimeInterval: 0.42, repeats: false) { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.didTriggerLongPress = true
+                        self.onModeKeyLongPress?()
                     }
                 }
             }
@@ -247,19 +243,32 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     }
 }
 
-/// Authentic iOS 26 soft-squircle necked Key Callout bubble.
+/// Authentic iOS 26 standalone floating squircle Key Callout Bubble (measured 1:1 from IMG_2628):
+/// - Zero neck: standalone `61.3 x 65.0pt` continuous-corner (`13.5pt`) floating card
+/// - Hovers `3.7pt` above the pressed keycap's top edge while the depressed keycap underneath
+///   remains visible at `RGB(230, 231, 232)` with its own glyph intact
+/// - `36.5pt` SF Pro Regular glyph optically centered with `19pt` top/bottom margins
 final class IOSKeyCalloutView: UIView {
+    private let cardView = UIView()
     private let glyphLabel = UILabel()
-    private var keyWidth: CGFloat = 36
-    private var isDark: Bool = false
 
     override init(frame: CGRect) {
-        super.init(frame: CGRect(x: 0, y: 0, width: 58, height: 106))
+        super.init(frame: CGRect(x: 0, y: 0, width: 61.33, height: 65.0))
         isOpaque = false
         isUserInteractionEnabled = false
-        glyphLabel.font = .systemFont(ofSize: 32, weight: .regular)
+        clipsToBounds = false
+
+        cardView.layer.cornerRadius = 13.5
+        cardView.layer.cornerCurve = .continuous
+        cardView.layer.shadowColor = UIColor.black.cgColor
+        cardView.layer.shadowOffset = CGSize(width: 0, height: 4.0)
+        cardView.layer.shadowRadius = 15.0
+
+        glyphLabel.font = .systemFont(ofSize: 36.5, weight: .regular)
         glyphLabel.textAlignment = .center
-        addSubview(glyphLabel)
+
+        addSubview(cardView)
+        cardView.addSubview(glyphLabel)
     }
 
     required init?(coder: NSCoder) {
@@ -267,68 +276,33 @@ final class IOSKeyCalloutView: UIView {
     }
 
     func present(label: String, over keyFrameInSuperview: CGRect, dark: Bool) {
-        isDark = dark
-        keyWidth = keyFrameInSuperview.width
-        let bubbleW = max(keyWidth + 18, 54)
-        let totalH = keyFrameInSuperview.height + 56
-        frame = CGRect(
-            x: keyFrameInSuperview.midX - bubbleW * 0.5,
-            y: keyFrameInSuperview.maxY - totalH,
-            width: bubbleW,
-            height: totalH
+        let bubbleW = max(61.33, keyFrameInSuperview.width * 1.67)
+        let bubbleH = max(65.0, keyFrameInSuperview.height * 1.44)
+        let superW = superview?.bounds.width ?? 440
+
+        let clampedX = min(
+            max(4.0, keyFrameInSuperview.midX - bubbleW * 0.5),
+            max(4.0, superW - bubbleW - 4.0)
         )
+        // Hover 3.67pt above keyFrame.minY; if superview clips top edge (Row 0), clamp softly to 1.5pt
+        let rawY = keyFrameInSuperview.minY - 3.67 - bubbleH
+        let finalY = (superview?.clipsToBounds == true) ? max(1.5, rawY) : rawY
+
+        frame = CGRect(x: clampedX, y: finalY, width: bubbleW, height: bubbleH)
+        cardView.frame = bounds
+        cardView.backgroundColor = dark
+            ? UIColor(red: 0.34, green: 0.34, blue: 0.37, alpha: 1.0)
+            : UIColor.white
+        cardView.layer.shadowOpacity = dark ? 0.38 : 0.13
+        cardView.layer.borderWidth = 0.4
+        cardView.layer.borderColor = (dark
+            ? UIColor.white.withAlphaComponent(0.14)
+            : UIColor.black.withAlphaComponent(0.04)).cgColor
+
         glyphLabel.text = label
         glyphLabel.textColor = dark ? .white : .black
-        glyphLabel.frame = CGRect(x: 0, y: 4, width: bubbleW, height: 50)
+        glyphLabel.frame = bounds.offsetBy(dx: 0, dy: -1.0)
         isHidden = false
-        setNeedsDisplay()
-    }
-
-    override func draw(_ rect: CGRect) {
-        let w = bounds.width
-        let h = bounds.height
-        let baseW = min(w - 4, keyWidth)
-        let baseLeft = (w - baseW) * 0.5
-        let baseRight = baseLeft + baseW
-        let neckY: CGFloat = 54
-        let rTop: CGFloat = 12.0
-        let rBot: CGFloat = 8.5
-
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: rTop + 2, y: 2))
-        path.addLine(to: CGPoint(x: w - rTop - 2, y: 2))
-        path.addQuadCurve(to: CGPoint(x: w - 2, y: rTop + 2), controlPoint: CGPoint(x: w - 2, y: 2))
-        path.addLine(to: CGPoint(x: w - 2, y: neckY - 12))
-        path.addCurve(
-            to: CGPoint(x: baseRight, y: neckY + 4),
-            controlPoint1: CGPoint(x: w - 2, y: neckY - 3),
-            controlPoint2: CGPoint(x: baseRight, y: neckY - 2)
-        )
-        path.addLine(to: CGPoint(x: baseRight, y: h - rBot))
-        path.addQuadCurve(to: CGPoint(x: baseRight - rBot, y: h), controlPoint: CGPoint(x: baseRight, y: h))
-        path.addLine(to: CGPoint(x: baseLeft + rBot, y: h))
-        path.addQuadCurve(to: CGPoint(x: baseLeft, y: h - rBot), controlPoint: CGPoint(x: baseLeft, y: h))
-        path.addLine(to: CGPoint(x: baseLeft, y: neckY + 4))
-        path.addCurve(
-            to: CGPoint(x: 2, y: neckY - 12),
-            controlPoint1: CGPoint(x: baseLeft, y: neckY - 2),
-            controlPoint2: CGPoint(x: 2, y: neckY - 3)
-        )
-        path.addLine(to: CGPoint(x: 2, y: rTop + 2))
-        path.addQuadCurve(to: CGPoint(x: rTop + 2, y: 2), controlPoint: CGPoint(x: 2, y: 2))
-        path.close()
-
-        let ctx = UIGraphicsGetCurrentContext()
-        ctx?.saveGState()
-        ctx?.setShadow(offset: CGSize(width: 0, height: 2), blur: 8, color: UIColor.black.withAlphaComponent(0.16).cgColor)
-        let fill = isDark ? UIColor(red: 0.34, green: 0.34, blue: 0.37, alpha: 1.0) : UIColor.white
-        fill.setFill()
-        path.fill()
-        ctx?.restoreGState()
-
-        UIColor.black.withAlphaComponent(0.08).setStroke()
-        path.lineWidth = 0.5
-        path.stroke()
     }
 }
 #endif

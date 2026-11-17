@@ -35,28 +35,28 @@ struct RenderIOSPreviews {
         let rSpec = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "r")) })!
         let wSpec = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "w")) })!
         let uSpec = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "u")) })!
+        let hSpec = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "h")) })!
 
-        // 1. Render Idle Default State (1:1 comparison against user's IMG_2627.PNG!)
+        // 1. Render Pressing `h` Callout State (1:1 comparison against user's IMG_2628.PNG!)
         bridge.clearComposition()
         try renderCanvas(
             IOS26KeyboardSheetPreview(
                 isDark: false,
                 snapshot: snap,
                 state: bridge.state,
-                pressedKey: nil,
+                pressedKey: hSpec,
                 expandedCandidates: nil
             ),
             width: 440,
             height: 430,
             isDark: false,
-            to: outDir.appendingPathComponent("ios26-keyboard-idle-light.png")
+            to: outDir.appendingPathComponent("ios26-bubble-h-light.png")
         )
 
-        // 2. Render Composing + Bayesian Touch-Border Rescue (`yrwu` -> "我们") + Necked Callout in Light Mode
+        // 2. Render Composing + Bayesian Touch-Border Rescue (`yrwu` -> "我们") + Row-0 Floating Squircle Bubble on `u`
         _ = bridge.pushTouch(reportedAscii: UInt8(ascii: "y"), x: Float(ySpec.frame.minX + 1.2), y: Float(tSpec.frame.midY + 1.0), isNormalized: false, timestampMs: 1000)
         _ = bridge.pushTouch(reportedAscii: UInt8(ascii: "r"), x: Float(rSpec.frame.midX), y: Float(rSpec.frame.midY), isNormalized: false, timestampMs: 1060)
         _ = bridge.pushTouch(reportedAscii: UInt8(ascii: "w"), x: Float(wSpec.frame.midX), y: Float(wSpec.frame.midY), isNormalized: false, timestampMs: 1120)
-        // Add a couple of prefix/neighbor candidates via `khk` vs `yrwu`: let's also test `khk` or `yrwu`!
         let typoState = bridge.pushTouch(reportedAscii: UInt8(ascii: "u"), x: Float(uSpec.frame.midX), y: Float(uSpec.frame.midY), isNormalized: false, timestampMs: 1180)
 
         try renderCanvas(
@@ -70,12 +70,12 @@ struct RenderIOSPreviews {
             width: 440,
             height: 430,
             isDark: false,
-            to: outDir.appendingPathComponent("ios26-keyboard-composing-light.png")
+            to: outDir.appendingPathComponent("ios26-bubble-u-composing.png")
         )
 
-        // 3. Render Dark Mode iOS 26 Liquid Glass Keyboard (Composing `khk` -> `中   跟踪   路口 ...`)
+        // 3. Render Dark Mode iOS 26 Liquid Glass Keyboard with Floating Squircle Bubble on `h`!
         bridge.clearComposition()
-        for ch in "khk".unicodeScalars {
+        for ch in "kh".unicodeScalars {
             _ = bridge.handleKey(keyCode: 0, scalar: ch.value, hasCmdOrCtrl: false, timestampMs: 2000)
         }
         try renderCanvas(
@@ -83,13 +83,13 @@ struct RenderIOSPreviews {
                 isDark: true,
                 snapshot: snap,
                 state: bridge.state,
-                pressedKey: nil,
+                pressedKey: hSpec,
                 expandedCandidates: nil
             ),
             width: 440,
             height: 430,
             isDark: true,
-            to: outDir.appendingPathComponent("ios26-keyboard-dark.png")
+            to: outDir.appendingPathComponent("ios26-bubble-dark.png")
         )
 
         // 4. Render Expanded 4-Column Candidate Grid (`zguo` Pinyin Reverse Lookup) in Light iOS 26 Glass
@@ -223,85 +223,112 @@ struct IOS26KeyboardSheetPreview: View {
             .padding(.bottom, 10)
 
             // iOS 26 Rounded Liquid Glass Keyboard Container (`346pt` = 52pt Candidate + 225pt Keys + 69pt System Bar)
-            VStack(spacing: 0) {
-                // 52pt Airy Unboxed Candidate Bar
-                HStack(spacing: 0) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 23) {
-                            if state.preedit.isEmpty {
-                                ForEach(Self.starterWords, id: \.self) { w in
-                                    Text(w)
-                                        .font(.system(size: 18.5, weight: .regular))
-                                        .foregroundStyle(isDark ? Color.white : Color.black)
-                                }
-                            } else {
-                                ForEach(Array(state.candidates.enumerated()), id: \.element.id) { idx, item in
-                                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                                        Text(item.text)
-                                            .font(.system(size: 18.5, weight: idx == 0 ? .medium : .regular))
+            ZStack(alignment: .topLeading) {
+                VStack(spacing: 0) {
+                    // 52pt Airy Unboxed Candidate Bar
+                    HStack(spacing: 0) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 23) {
+                                if state.preedit.isEmpty {
+                                    ForEach(Self.starterWords, id: \.self) { w in
+                                        Text(w)
+                                            .font(.system(size: 18.5, weight: .regular))
                                             .foregroundStyle(isDark ? Color.white : Color.black)
-                                        if !item.comment.isEmpty && (item.badgeKind == .typoCorrected || item.badgeKind == .shortcode || item.badgeKind == .pinyinLookup) {
-                                            let shortHint = item.badgeKind == .typoCorrected
-                                                ? (item.comment.components(separatedBy: " ").first ?? item.comment)
-                                                : item.comment
-                                            Text(shortHint)
-                                                .font(.system(size: 11, design: .monospaced))
-                                                .foregroundStyle(.secondary)
+                                    }
+                                } else {
+                                    ForEach(Array(state.candidates.enumerated()), id: \.element.id) { idx, item in
+                                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                            Text(item.text)
+                                                .font(.system(size: 18.5, weight: idx == 0 ? .medium : .regular))
+                                                .foregroundStyle(isDark ? Color.white : Color.black)
+                                            if !item.comment.isEmpty && (item.badgeKind == .typoCorrected || item.badgeKind == .shortcode || item.badgeKind == .pinyinLookup) {
+                                                let shortHint = item.badgeKind == .typoCorrected
+                                                    ? (item.comment.components(separatedBy: " ").first ?? item.comment)
+                                                    : item.comment
+                                                Text(shortHint)
+                                                    .font(.system(size: 11, design: .monospaced))
+                                                    .foregroundStyle(.secondary)
+                                            }
                                         }
                                     }
                                 }
                             }
+                            .padding(.horizontal, 15)
                         }
-                        .padding(.horizontal, 15)
+
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.14))
+                            .frame(width: 0.7, height: 21)
+
+                        Image(systemName: expandedCandidates != nil ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(isDark ? Color.white : Color.black)
+                            .frame(width: 44)
+                    }
+                    .frame(height: 52.5)
+
+                    // 225pt 4-Row Key Area (or Expanded 4-Column Grid)
+                    if let expanded = expandedCandidates {
+                        IOS26ExpandedGridPreview(candidates: expanded, isDark: isDark)
+                            .frame(width: 440, height: 225)
+                    } else {
+                        IOS26KeyCanvasPreview(snapshot: snapshot, isDark: isDark, pressedKey: pressedKey)
+                            .frame(width: 440, height: 225)
                     }
 
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.14))
-                        .frame(width: 0.7, height: 21)
-
-                    Image(systemName: expandedCandidates != nil ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(isDark ? Color.white : Color.black)
-                        .frame(width: 44)
+                    // 69pt System Bottom Safe-Area Bar (`🌐` left, `🎤` right) matching Face ID iOS 26!
+                    HStack {
+                        Image(systemName: "globe")
+                            .font(.system(size: 25, weight: .light))
+                            .foregroundStyle(isDark ? Color.white.opacity(0.88) : Color.black.opacity(0.85))
+                            .padding(.leading, 29)
+                        Spacer()
+                        Image(systemName: "mic")
+                            .font(.system(size: 24, weight: .light))
+                            .foregroundStyle(isDark ? Color.white.opacity(0.88) : Color.black.opacity(0.85))
+                            .padding(.trailing, 31)
+                    }
+                    .frame(height: 68.5)
                 }
-                .frame(height: 52.5)
+                .background(
+                    TopRoundedShape(radius: 26)
+                        .fill(trayBg)
+                )
+                .overlay(
+                    TopRoundedShape(radius: 25.5)
+                        .stroke(isDark ? Color.white.opacity(0.16) : Color.white.opacity(0.92), lineWidth: 0.9)
+                        .padding(0.7)
+                )
+                .overlay(
+                    TopRoundedShape(radius: 26)
+                        .stroke(isDark ? Color.black.opacity(0.55) : Color(white: 0.81), lineWidth: 0.6)
+                )
 
-                // 225pt 4-Row Key Area (or Expanded 4-Column Grid)
-                if let expanded = expandedCandidates {
-                    IOS26ExpandedGridPreview(candidates: expanded, isDark: isDark)
-                        .frame(width: 440, height: 225)
-                } else {
-                    IOS26KeyCanvasPreview(snapshot: snapshot, isDark: isDark, pressedKey: pressedKey)
-                        .frame(width: 440, height: 225)
-                }
+                // Render standalone iOS 26 floating squircle bubble ABOVE the tray & candidate rim!
+                if expandedCandidates == nil, let pk = pressedKey {
+                    let bw: CGFloat = max(61.33, pk.frame.width * 1.67)
+                    let bh: CGFloat = max(65.0, pk.frame.height * 1.44)
+                    let clampedMidX = min(max(4.0 + bw * 0.5, pk.frame.midX), snapshot.bounds.width - 4.0 - bw * 0.5)
+                    let bubbleMidY = 52.5 + pk.frame.minY - 3.67 - bh * 0.5
+                    let fgColor = isDark ? Color.white : Color.black
 
-                // 69pt System Bottom Safe-Area Bar (`🌐` left, `🎤` right) matching Face ID iOS 26!
-                HStack {
-                    Image(systemName: "globe")
-                        .font(.system(size: 25, weight: .light))
-                        .foregroundStyle(isDark ? Color.white.opacity(0.88) : Color.black.opacity(0.85))
-                        .padding(.leading, 29)
-                    Spacer()
-                    Image(systemName: "mic")
-                        .font(.system(size: 24, weight: .light))
-                        .foregroundStyle(isDark ? Color.white.opacity(0.88) : Color.black.opacity(0.85))
-                        .padding(.trailing, 31)
+                    RoundedRectangle(cornerRadius: 13.5, style: .continuous)
+                        .fill(isDark ? Color(red: 0.34, green: 0.34, blue: 0.37) : Color.white)
+                        .shadow(color: .black.opacity(isDark ? 0.38 : 0.13), radius: 15, x: 0, y: 4.0)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 13.5, style: .continuous)
+                                .strokeBorder(isDark ? Color.white.opacity(0.14) : Color.black.opacity(0.04), lineWidth: 0.4)
+                        )
+                        .overlay(
+                            Text(pk.primaryLabel)
+                                .font(.system(size: 36.5, weight: .regular))
+                                .foregroundStyle(fgColor)
+                                .offset(y: -1.0)
+                        )
+                        .frame(width: bw, height: bh)
+                        .position(x: clampedMidX, y: bubbleMidY)
                 }
-                .frame(height: 68.5)
             }
-            .background(
-                TopRoundedShape(radius: 26)
-                    .fill(trayBg)
-            )
-            .overlay(
-                TopRoundedShape(radius: 25.5)
-                    .stroke(isDark ? Color.white.opacity(0.16) : Color.white.opacity(0.92), lineWidth: 0.9)
-                    .padding(0.7)
-            )
-            .overlay(
-                TopRoundedShape(radius: 26)
-                    .stroke(isDark ? Color.black.opacity(0.55) : Color(white: 0.81), lineWidth: 0.6)
-            )
         }
         .background(appSurface)
     }
@@ -314,16 +341,20 @@ struct IOS26KeyCanvasPreview: View {
 
     var body: some View {
         let keyFill = isDark ? Color(red: 0.28, green: 0.28, blue: 0.30) : Color.white
+        let pressedFill = isDark
+            ? Color(red: 0.20, green: 0.20, blue: 0.22)
+            : Color(red: 219.0 / 255.0, green: 220.0 / 255.0, blue: 224.0 / 255.0)
         let fgColor = isDark ? Color.white : Color.black
         let subColor = isDark ? Color.white.opacity(0.40) : Color(red: 0.64, green: 0.65, blue: 0.67)
 
         ZStack(alignment: .topLeading) {
             ForEach(snapshot.keys) { spec in
-                let fill = spec.isBlueAccent ? Color.blue : keyFill
+                let isPressed = (spec.id == pressedKey?.id)
+                let fill = spec.isBlueAccent ? Color.blue : (isPressed ? pressedFill : keyFill)
 
                 RoundedRectangle(cornerRadius: 8.5, style: .continuous)
                     .fill(fill)
-                    .shadow(color: .black.opacity(isDark ? 0.24 : 0.035), radius: 0.5, x: 0, y: 0.5)
+                    .shadow(color: .black.opacity(isPressed ? 0.0 : (isDark ? 0.24 : 0.035)), radius: 0.5, x: 0, y: 0.5)
                     .frame(width: spec.frame.width, height: spec.frame.height)
                     .overlay {
                         ZStack {
@@ -358,24 +389,6 @@ struct IOS26KeyCanvasPreview: View {
                         }
                     }
                     .position(x: spec.frame.midX, y: spec.frame.midY)
-            }
-
-            if let pk = pressedKey {
-                let bw: CGFloat = max(pk.frame.width + 18, 54)
-                let bh: CGFloat = pk.frame.height + 56
-                ZStack(alignment: .top) {
-                    IOS26NeckedCalloutShape(baseWidth: pk.frame.width)
-                        .fill(isDark ? Color(red: 0.35, green: 0.35, blue: 0.38) : Color.white)
-                        .shadow(color: .black.opacity(0.16), radius: 6, x: 0, y: 2)
-                    IOS26NeckedCalloutShape(baseWidth: pk.frame.width)
-                        .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
-                    Text(pk.primaryLabel)
-                        .font(.system(size: 31, weight: .regular))
-                        .foregroundStyle(fgColor)
-                        .padding(.top, 7)
-                }
-                .frame(width: bw, height: bh)
-                .position(x: pk.frame.midX, y: pk.frame.maxY - bh * 0.5)
             }
         }
     }
