@@ -1,4 +1,4 @@
-.PHONY: all dicts rust-test swift-test test app install previews ios-core clean
+.PHONY: all dicts rust-test swift-test ios-test test app install previews ios-previews ios-project ios-core clean
 
 CERT_NAME ?= Talus Local Code Signing
 CODESIGN_IDENTITY ?= auto
@@ -67,17 +67,30 @@ swift-test: $(CORE_LIB)
 	swiftc -O Sources/WubiCoreBridge.swift Tests/SwiftBridgeTests.swift $(CORE_FLAGS) -framework Foundation -framework AppKit -o build/swift-bridge-tests
 	build/swift-bridge-tests
 
-test: rust-test swift-test
+test: rust-test swift-test ios-test
+
+ios-test: $(CORE_LIB)
+	mkdir -p build
+	swiftc -O Sources/WubiCoreBridge.swift iOS/Shared/IOSKeyboardLayoutEngine.swift Tests/IOSKeyboardTests.swift $(CORE_FLAGS) -framework Foundation -framework CoreGraphics -o build/ios-keyboard-tests
+	build/ios-keyboard-tests
 
 previews: $(CORE_LIB)
 	mkdir -p build/previews
 	swiftc -O $(UI_SOURCES) Scripts/RenderPreviews.swift $(CORE_FLAGS) -framework Cocoa -framework SwiftUI -o build/render-previews
 	build/render-previews build/previews
 
+ios-previews: $(CORE_LIB)
+	mkdir -p build/ios-previews
+	swiftc -O Sources/WubiCoreBridge.swift iOS/Shared/IOSKeyboardLayoutEngine.swift iOS/HostApp/HostAppViews.swift Scripts/RenderIOSPreviews.swift $(CORE_FLAGS) -framework Cocoa -framework SwiftUI -o build/render-ios-previews
+	build/render-ios-previews build/ios-previews
+
+ios-project:
+	chmod +x iOS/Scripts/build-rust-ios.sh
+	cd iOS && xcodegen generate
+
 ios-core:
-	rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-	cargo build --release --manifest-path Core/Cargo.toml --target aarch64-apple-ios
-	cargo build --release --manifest-path Core/Cargo.toml --target aarch64-apple-ios-sim
+	cargo build --release --manifest-path Core/Cargo.toml --lib --target aarch64-apple-ios
+	cargo build --release --manifest-path Core/Cargo.toml --lib --target aarch64-apple-ios-sim
 
 clean:
 	rm -rf build

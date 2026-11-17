@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 public struct WubiCandidateItem: Codable, Identifiable, Equatable {
@@ -30,6 +29,14 @@ public struct WubiCandidateItem: Codable, Identifiable, Equatable {
         default: return .none
         }
     }
+}
+
+public struct TouchKeyCalibrationItem: Codable, Identifiable, Equatable {
+    public let key: String
+    public let dx: Float
+    public let dy: Float
+    public let samples: UInt32
+    public var id: String { key }
 }
 
 public struct WubiActionState: Codable, Equatable {
@@ -75,6 +82,8 @@ public struct UserPhraseRecord: Codable, Identifiable, Equatable {
 }
 
 public struct WubiPreferences: Equatable {
+    public static let appGroupIdentifier = "group.com.priswubi.shared"
+
     public var schemaId: UInt32 = 86
     public var pageSize: Int = 5
     public var vertical: Bool = false
@@ -230,12 +239,15 @@ public final class WubiBridge: ObservableObject {
     @Published public private(set) var state: WubiActionState = .empty
     @Published public var prefs: WubiPreferences = WubiPreferences()
     @Published public private(set) var userPhrases: [UserPhraseRecord] = []
+    @Published public private(set) var touchCalibrations: [TouchKeyCalibrationItem] = []
 
     public let configURL: URL
     public let userDataURL: URL
+    public let hasSharedContainerAccess: Bool
 
     public init(customDictsDir: URL? = nil, inMemoryOnly: Bool = false) {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        #if os(macOS)
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         let dotfile = home.appendingPathComponent(".priswubi.toml")
         let appSupport = home
             .appendingPathComponent("Library/Application Support/PrisWubi", isDirectory: true)
@@ -248,6 +260,22 @@ public final class WubiBridge: ObservableObject {
             self.configURL = appSupport.appendingPathComponent("config.toml")
         }
         self.userDataURL = appSupport.appendingPathComponent("user_data.tsv")
+        self.hasSharedContainerAccess = true
+        #else
+        if let groupURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: WubiPreferences.appGroupIdentifier
+        ) {
+            self.configURL = groupURL.appendingPathComponent("config.toml")
+            self.userDataURL = groupURL.appendingPathComponent("user_data.tsv")
+            self.hasSharedContainerAccess = true
+        } else {
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+                ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            self.configURL = docs.appendingPathComponent("config.toml")
+            self.userDataURL = docs.appendingPathComponent("user_data.tsv")
+            self.hasSharedContainerAccess = false
+        }
+        #endif
 
         self.handle = wubi_engine_new()
         loadDictionaries(overrideDir: customDictsDir)
@@ -255,6 +283,7 @@ public final class WubiBridge: ObservableObject {
             loadConfigAndUser()
         } else {
             refreshState()
+            refreshTouchProfile()
         }
     }
 
@@ -269,6 +298,7 @@ public final class WubiBridge: ObservableObject {
         let candidateDirs: [URL] = [
             overrideDir,
             Bundle.main.resourceURL?.appendingPathComponent("Dicts", isDirectory: true),
+            Bundle.main.resourceURL,
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                 .appendingPathComponent("Resources/Dicts", isDirectory: true),
         ].compactMap { $0 }
@@ -302,6 +332,7 @@ public final class WubiBridge: ObservableObject {
         self.prefs = WubiPreferences.fromTOML(toml)
         refreshState()
         refreshUserPhrases()
+        refreshTouchProfile()
     }
 
     public func applyAndSavePreferences(_ newPrefs: WubiPreferences, persist: Bool = true) {
@@ -322,11 +353,25 @@ public final class WubiBridge: ObservableObject {
         applyAndSavePreferences(updated, persist: persist)
     }
 
+    public func setKeyLayout(
+        centers52: [Float],
+        originX: Float,
+        originY: Float,
+        pitchX: Float,
+        pitchY: Float
+    ) {
+        guard let h = handle, centers52.count == 52 else { return }
+        centers52.withUnsafeBufferPointer { buf in
+            wubi_engine_set_key_layout(h, buf.baseAddress, originX, originY, pitchX, pitchY)
+        }
+    }
+
     public func flushUserDataIfNeeded() {
         guard let h = handle else { return }
         if wubi_engine_is_user_dirty(h) {
             _ = userDataURL.path.withCString { wubi_engine_save_user_data(h, $0) }
             refreshUserPhrases()
+            refreshTouchProfile()
         }
     }
 
@@ -362,7 +407,27 @@ public final class WubiBridge: ObservableObject {
         let json = takeString(wubi_engine_select_candidate_json(h, UInt32(max(0, pageRelIndex)), timestampMs))
         let decoded = decodeState(json)
         self.state = decoded
+        refreshTouchProfile()
         return decoded
+    }
+
+    public func selectAbsCandidate(absIndex: Int, timestampMs: UInt64) -> WubiActionState {
+        guard let h = handle else { return .empty }
+        let json = takeString(wubi_engine_select_abs_candidate_json(h, UInt32(max(0, absIndex)), timestampMs))
+        let decoded = decodeState(json)
+        self.state = decoded
+        refreshTouchProfile()
+        return decoded
+    }
+
+    public func allCandidates(maxCount: Int = 60) -> [WubiCandidateItem] {
+        guard let h = handle else { return [] }
+        let json = takeString(wubi_engine_all_candidates_json(h, UInt32(max(1, maxCount))))
+        if let data = json.data(using: .utf8),
+           let list = try? decoder.decode([WubiCandidateItem].self, from: data) {
+            return list
+        }
+        return []
     }
 
     public func turnPage(delta: Int32) -> WubiActionState {
@@ -418,6 +483,7 @@ public final class WubiBridge: ObservableObject {
             flushUserDataIfNeeded()
         }
         refreshState()
+        refreshTouchProfile()
     }
 
     public func refreshUserPhrases() {
@@ -426,6 +492,15 @@ public final class WubiBridge: ObservableObject {
         if let data = json.data(using: .utf8),
            let list = try? decoder.decode([UserPhraseRecord].self, from: data) {
             self.userPhrases = list
+        }
+    }
+
+    public func refreshTouchProfile() {
+        guard let h = handle else { return }
+        let json = takeString(wubi_engine_touch_profile_json(h))
+        if let data = json.data(using: .utf8),
+           let list = try? decoder.decode([TouchKeyCalibrationItem].self, from: data) {
+            self.touchCalibrations = list
         }
     }
 

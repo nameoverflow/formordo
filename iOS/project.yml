@@ -1,0 +1,95 @@
+name: PrisWubi
+options:
+  bundleIdPrefix: com.priswubi
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_OBJC_BRIDGING_HEADER: "$(PROJECT_DIR)/../Core/include/wubi_core.h"
+    LIBRARY_SEARCH_PATHS:
+      - "$(inherited)"
+      - "$(PROJECT_DIR)/build-lib"
+    OTHER_LDFLAGS:
+      - "$(inherited)"
+      - "-lwubi_core"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+targets:
+  PrisWubiApp:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../Sources/WubiCoreBridge.swift
+      - path: Shared
+      - path: HostApp
+        excludes:
+          - "*.plist"
+          - "*.entitlements"
+      - path: ../Resources/Dicts
+        type: folder
+        buildPhase: resources
+    info:
+      path: HostApp/Info.plist
+    entitlements:
+      path: HostApp/PrisWubiApp.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.priswubi.ios
+        PRODUCT_NAME: PrisWubiApp
+        INFOPLIST_FILE: HostApp/Info.plist
+        CODE_SIGN_ENTITLEMENTS: HostApp/PrisWubiApp.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+    preBuildScripts:
+      - name: Build Rust Wubi Core Staticlib
+        script: |
+          sh "$PROJECT_DIR/Scripts/build-rust-ios.sh"
+        basedOnDependencyAnalysis: false
+    dependencies:
+      - target: PrisWubiKeyboard
+        embed: true
+
+  PrisWubiKeyboard:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: ../Sources/WubiCoreBridge.swift
+      - path: Shared
+      - path: KeyboardExtension
+        excludes:
+          - "*.plist"
+          - "*.entitlements"
+      - path: ../Resources/Dicts
+        type: folder
+        buildPhase: resources
+    info:
+      path: KeyboardExtension/Info.plist
+    entitlements:
+      path: KeyboardExtension/PrisWubiKeyboard.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.priswubi.ios.keyboard
+        PRODUCT_NAME: PrisWubiKeyboard
+        INFOPLIST_FILE: KeyboardExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: KeyboardExtension/PrisWubiKeyboard.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+    preBuildScripts:
+      - name: Build Rust Wubi Core Staticlib
+        script: |
+          sh "$PROJECT_DIR/Scripts/build-rust-ios.sh"
+        basedOnDependencyAnalysis: false
+
+schemes:
+  PrisWubiApp:
+    build:
+      targets:
+        PrisWubiApp: all
+        PrisWubiKeyboard: all
+    run:
+      config: Release

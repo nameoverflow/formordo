@@ -73,6 +73,15 @@ char *wubi_engine_select_candidate_json(
     uint64_t timestamp_ms
 );
 
+char *wubi_engine_select_abs_candidate_json(
+    WubiEngineHandle *handle,
+    uint32_t abs_index,
+    uint64_t timestamp_ms
+);
+
+char *wubi_engine_all_candidates_json(const WubiEngineHandle *handle, uint32_t max_count);
+char *wubi_engine_touch_profile_json(const WubiEngineHandle *handle);
+
 char *wubi_engine_page_turn_json(WubiEngineHandle *handle, int32_t delta);
 char *wubi_engine_state_json(const WubiEngineHandle *handle);
 

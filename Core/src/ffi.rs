@@ -508,6 +508,72 @@ pub extern "C" fn wubi_engine_page_turn_json(
 }
 
 #[no_mangle]
+pub extern "C" fn wubi_engine_select_abs_candidate_json(
+    handle: *mut WubiEngineHandle,
+    abs_index: u32,
+    timestamp_ms: u64,
+) -> *mut c_char {
+    let Some(h) = (unsafe { handle.as_mut() }) else {
+        return into_c_string("{}".to_string());
+    };
+    let out = h
+        .inner
+        .select_abs_candidate(abs_index as usize, timestamp_ms);
+    into_c_string(serialize_action_and_state(&h.inner, out.as_ref()))
+}
+
+#[no_mangle]
+pub extern "C" fn wubi_engine_all_candidates_json(
+    handle: *const WubiEngineHandle,
+    max_count: u32,
+) -> *mut c_char {
+    let Some(h) = (unsafe { handle.as_ref() }) else {
+        return into_c_string("[]".to_string());
+    };
+    let limit = (max_count as usize).clamp(1, 120);
+    let mut j = String::from("[");
+    for (idx, c) in h.inner.all_candidates().iter().take(limit).enumerate() {
+        if idx > 0 {
+            j.push(',');
+        }
+        j.push_str("{\"index\":");
+        j.push_str(&(idx + 1).to_string());
+        j.push_str(",\"text\":");
+        json_escape(&c.text, &mut j);
+        j.push_str(",\"comment\":");
+        json_escape(&c.comment, &mut j);
+        j.push_str(&format!(
+            ",\"badge\":{},\"confidence\":{:.3},\"isExact\":{}}}",
+            c.badge as u8, c.confidence, c.is_exact
+        ));
+    }
+    j.push(']');
+    into_c_string(j)
+}
+
+#[no_mangle]
+pub extern "C" fn wubi_engine_touch_profile_json(
+    handle: *const WubiEngineHandle,
+) -> *mut c_char {
+    let Some(h) = (unsafe { handle.as_ref() }) else {
+        return into_c_string("[]".to_string());
+    };
+    let mut j = String::from("[");
+    for (i, t) in h.inner.user.touch_profile.keys.iter().enumerate() {
+        if i > 0 {
+            j.push(',');
+        }
+        let ch = (b'a' + i as u8) as char;
+        j.push_str(&format!(
+            "{{\"key\":\"{}\",\"dx\":{:.4},\"dy\":{:.4},\"samples\":{}}}",
+            ch, t.dx, t.dy, t.samples
+        ));
+    }
+    j.push(']');
+    into_c_string(j)
+}
+
+#[no_mangle]
 pub extern "C" fn wubi_engine_state_json(handle: *const WubiEngineHandle) -> *mut c_char {
     let Some(h) = (unsafe { handle.as_ref() }) else {
         return into_c_string("{}".to_string());

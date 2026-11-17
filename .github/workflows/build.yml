@@ -1,0 +1,27 @@
+name: Build macOS & iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim
+      - name: Run Core & macOS Tests + Build App
+        run: make test app
+      - name: Generate & Build iOS Host App + Keyboard Extension (Simulator)
+        run: |
+          brew install xcodegen
+          cd iOS && xcodegen generate
+          xcodebuild -project PrisWubi.xcodeproj \
+            -scheme PrisWubiApp \
+            -sdk iphonesimulator \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            build
