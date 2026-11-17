@@ -40,8 +40,8 @@ public final class KeyboardViewController: UIInputViewController {
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let isLandscape = view.bounds.width > 540
-        // 52pt candidate ribbon + 225pt 4-row keyboard (`keyH = 45pt`) = 277pt matching iOS 26 native height
-        let targetH: CGFloat = isLandscape ? 212 : 277
+        // 44pt candidate ribbon + 219pt 4-row keyboard (`keyH = 45pt`) = 263pt matching iOS 26 native height
+        let targetH: CGFloat = isLandscape ? 204 : 263
         if heightConstraint?.constant != targetH {
             heightConstraint?.constant = targetH
         }
@@ -65,7 +65,9 @@ public final class KeyboardViewController: UIInputViewController {
         glassBackdrop.layer.borderWidth = 0.5
 
         ribbonView.translatesAutoresizingMaskIntoConstraints = false
+        ribbonView.accessibilityIdentifier = "PrisWubiRibbon"
         keyCanvas.translatesAutoresizingMaskIntoConstraints = false
+        keyCanvas.accessibilityIdentifier = "PrisWubiKeyCanvas"
         expandedGrid.translatesAutoresizingMaskIntoConstraints = false
         quickPrefsView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -80,7 +82,7 @@ public final class KeyboardViewController: UIInputViewController {
         inputView.addSubview(quickPrefsView)
         inputView.addSubview(calloutView)
 
-        let hc = inputView.heightAnchor.constraint(equalToConstant: 277)
+        let hc = inputView.heightAnchor.constraint(equalToConstant: 263)
         hc.priority = .defaultHigh
         self.heightConstraint = hc
 
@@ -237,7 +239,7 @@ public final class KeyboardViewController: UIInputViewController {
 
         expandedGrid.onClear = { [weak self] in
             self?.bridge.clearComposition()
-            self?.textDocumentProxy.unmarkText()
+            self?.clearMarkedTextSafely()
             self?.expandedGrid.isHidden = true
             self?.keyCanvas.isHidden = false
             self?.ribbonView.setExpanded(false)
@@ -335,9 +337,16 @@ public final class KeyboardViewController: UIInputViewController {
         }
     }
 
+    private func clearMarkedTextSafely() {
+        // In UIKit's UITextDocumentProxy, bare `unmarkText()` commits the marked string in place!
+        // Setting empty marked text first removes the inline raw preedit before unmarking.
+        textDocumentProxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
+        textDocumentProxy.unmarkText()
+    }
+
     private func commitPendingFirstIfComposing() {
         guard !bridge.state.preedit.isEmpty else { return }
-        textDocumentProxy.unmarkText()
+        clearMarkedTextSafely()
         if let first = bridge.state.candidates.first?.text {
             textDocumentProxy.insertText(first)
         } else {
@@ -378,13 +387,15 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func applyEngineState(_ out: WubiActionState) {
         if !out.commitText.isEmpty {
-            textDocumentProxy.unmarkText()
+            clearMarkedTextSafely()
             textDocumentProxy.insertText(out.commitText)
             bridge.flushUserDataIfNeeded()
         }
         // Inline marked text directly in the iOS input field matching native Wubi!
         if out.preedit.isEmpty {
-            textDocumentProxy.unmarkText()
+            if out.commitText.isEmpty {
+                clearMarkedTextSafely()
+            }
             if !expandedGrid.isHidden {
                 expandedGrid.isHidden = true
                 keyCanvas.isHidden = false
@@ -413,12 +424,9 @@ public final class KeyboardViewController: UIInputViewController {
         layoutEngine.returnRole = Self.mapReturnKeyType(textDocumentProxy.returnKeyType)
         let dark = isDarkAppearance
 
-        glassBackdrop.backgroundColor = dark
-            ? UIColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 0.96)
-            : UIColor(red: 0.906, green: 0.910, blue: 0.922, alpha: 0.98)
-        glassBackdrop.layer.borderColor = (dark
-            ? UIColor.white.withAlphaComponent(0.12)
-            : UIColor(red: 0.82, green: 0.82, blue: 0.83, alpha: 1.0)).cgColor
+        // Keep backdrop completely transparent so iOS 26's native system Liquid Glass vibrancy shines through!
+        glassBackdrop.backgroundColor = .clear
+        glassBackdrop.layer.borderWidth = 0
 
         keyCanvas.applyTheme(dark: dark)
         ribbonView.update(state: bridge.state, dark: dark)

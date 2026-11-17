@@ -97,7 +97,7 @@ public struct IOSKeySpec: Identifiable, Equatable {
 public struct IOSKeyboardLayoutEngine {
     public static let keyCornerRadius: CGFloat = 8.5
     public static let trayTopCornerRadius: CGFloat = 26.0
-    public static let candidateBarHeight: CGFloat = 52.0
+    public static let candidateBarHeight: CGFloat = 44.0
 
     public var plane: IOSKeyPlane = .letters
     public var shiftState: IOSShiftState = .lower
@@ -173,8 +173,8 @@ public struct IOSKeyboardLayoutEngine {
         // Exact iOS 26 proportions (`440pt` -> outerMargin `6.67pt`, gapX `6.67pt`, keyW `36.67pt`, pitchX `43.33pt`)
         let outerX: CGFloat = isLandscape ? 8.0 : round(w * (20.0 / 1320.0) * 3.0) / 3.0
         let gapX: CGFloat = isLandscape ? 7.0 : round(w * (20.0 / 1320.0) * 3.0) / 3.0
-        let topPad: CGFloat = isLandscape ? 4.0 : 5.0
-        let bottomPad: CGFloat = isLandscape ? 4.0 : 8.0
+        let topPad: CGFloat = isLandscape ? 3.0 : 4.0
+        let bottomPad: CGFloat = isLandscape ? 3.0 : 2.0
         let rowGap: CGFloat = isLandscape ? 8.0 : 11.0
 
         let usableH = h - topPad - bottomPad - rowGap * 3.0

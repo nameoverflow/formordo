@@ -34,6 +34,7 @@ public struct IOSHostRootView: View {
     @ObservedObject public var bridge: WubiBridge
     @State public var selectedTab: IOSHostTab
     @State private var sandboxText: String = ""
+    @FocusState private var sandboxFocused: Bool
     @State private var newWord: String = ""
     @State private var wordFeedback: String = ""
 
@@ -100,9 +101,9 @@ public struct IOSHostRootView: View {
     // MARK: - Tab 1: Home, Enable Guide & Live Typing Sandbox
 
     private var homeTab: some View {
-        iosScreenContainer(title: "棱五笔") {
+        iosScreenContainer(title: "") {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 14) {
                     // Hero Banner
                     HStack(spacing: 14) {
                         ZStack {
@@ -145,6 +146,17 @@ public struct IOSHostRootView: View {
                     .padding(14)
                     .background(iosCardBackground)
 
+                    // Live Typing Test Box (placed near top so focusing never scrolls hero under status bar)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("键盘实时试手区", systemImage: "character.cursor.ibeam")
+                            .font(.system(size: 14, weight: .semibold))
+                        TextField("点此弹出键盘试打五笔、长按空格滑动移光标…", text: $sandboxText)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($sandboxFocused)
+                    }
+                    .padding(14)
+                    .background(iosCardBackground)
+
                     // Enable Keyboard Steps
                     VStack(alignment: .leading, spacing: 11) {
                         HStack {
@@ -159,7 +171,7 @@ public struct IOSHostRootView: View {
                                 .background(Color.green.opacity(0.14), in: Capsule())
                         }
 
-                        stepLine(num: "1", text: "进入「设置 → 通用 → 键盘 → 键盘 → 添加新键盘…」")
+                        stepLine(num: "1", text: "进入「设置 → 通用 → 键盘 → 键盘 → 添加新键盘」")
                         stepLine(num: "2", text: "在第三方键盘中选择「棱五笔」即可离线极速盲打")
                         stepLine(num: "3", text: "可选开启「允许完全访问」以启用按键轻触震动与宿主词库同步")
 
@@ -182,18 +194,15 @@ public struct IOSHostRootView: View {
                     }
                     .padding(14)
                     .background(iosCardBackground)
-
-                    // Live Typing Test Box
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("键盘实时试手区", systemImage: "character.cursor.ibeam")
-                            .font(.system(size: 14, weight: .semibold))
-                        TextField("点此弹出键盘试打五笔、长按空格滑动移光标…", text: $sandboxText)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    .padding(14)
-                    .background(iosCardBackground)
                 }
                 .padding(16)
+            }
+            .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("--autofocus") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        sandboxFocused = true
+                    }
+                }
             }
         }
     }
@@ -369,16 +378,23 @@ public struct IOSHostRootView: View {
     private func iosScreenContainer<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         #if os(iOS)
         NavigationStack {
-            content()
-                .navigationTitle(title)
+            if title.isEmpty {
+                content()
+                    .toolbar(.hidden, for: .navigationBar)
+            } else {
+                content()
+                    .navigationTitle(title)
+            }
         }
         #else
         VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .font(.system(size: 27, weight: .bold))
-                .padding(.horizontal, 18)
-                .padding(.top, 6)
-                .padding(.bottom, 4)
+            if !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 27, weight: .bold))
+                    .padding(.horizontal, 18)
+                    .padding(.top, 6)
+                    .padding(.bottom, 4)
+            }
             content()
         }
         #endif

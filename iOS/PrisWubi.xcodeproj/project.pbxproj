@@ -18,10 +18,18 @@
 		65371983B35BE75EBDFFD8E4 /* IOSKeyCanvasAndCallout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F041469F3DCD105F71210FD /* IOSKeyCanvasAndCallout.swift */; };
 		A6A25F15C0133AD063D0332D /* Dicts in Resources */ = {isa = PBXBuildFile; fileRef = 93C2D593570B7763381F20F0 /* Dicts */; };
 		DB5E7BE9DD8ED93742F22633 /* IOSCandidateViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADD2833DB2E106E705330613 /* IOSCandidateViews.swift */; };
+		E6206E6B38C847EC62265FFA /* PrisWubiSimulatorUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FFF3375C4BC3338F1EE5887 /* PrisWubiSimulatorUITests.swift */; };
 		FDC0C44E3C82997C4D7B0826 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD2549046A68359BCF56EAD /* KeyboardViewController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		9E8A507283E0FCAF1A7C2DF8 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2ADEC15F0C52FAE6EE96BF5C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = D559B54E29D98A6C990822C9;
+			remoteInfo = PrisWubiApp;
+		};
 		E2DF63A31A7B3725DF5B7B7A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 2ADEC15F0C52FAE6EE96BF5C /* Project object */;
@@ -49,12 +57,14 @@
 		06089A75C274438ECC15C8C2 /* PrisWubiIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrisWubiIOSApp.swift; sourceTree = "<group>"; };
 		0F041469F3DCD105F71210FD /* IOSKeyCanvasAndCallout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSKeyCanvasAndCallout.swift; sourceTree = "<group>"; };
 		2C04A8DACAB512A4EAE35043 /* HostAppViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostAppViews.swift; sourceTree = "<group>"; };
+		2FFF3375C4BC3338F1EE5887 /* PrisWubiSimulatorUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrisWubiSimulatorUITests.swift; sourceTree = "<group>"; };
 		3FFA5F9F9F1257560BC74D3C /* IOSKeyboardLayoutEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSKeyboardLayoutEngine.swift; sourceTree = "<group>"; };
 		48AA36A1ED6E24C66EF41B4E /* PrisWubiKeyboard.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = PrisWubiKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		93C2D593570B7763381F20F0 /* Dicts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Dicts; path = ../Resources/Dicts; sourceTree = SOURCE_ROOT; };
 		A36B024EC8D33514A9296D11 /* PrisWubiApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PrisWubiApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		ADD2833DB2E106E705330613 /* IOSCandidateViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSCandidateViews.swift; sourceTree = "<group>"; };
 		C3133045909EAEA851371DF0 /* WubiCoreBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WubiCoreBridge.swift; sourceTree = "<group>"; };
+		CB29750C72814D83C60B861B /* PrisWubiUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PrisWubiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DFD2549046A68359BCF56EAD /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -66,6 +76,14 @@
 				06089A75C274438ECC15C8C2 /* PrisWubiIOSApp.swift */,
 			);
 			path = HostApp;
+			sourceTree = "<group>";
+		};
+		67A4BE0E71FC6E0696FDBBA5 /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				2FFF3375C4BC3338F1EE5887 /* PrisWubiSimulatorUITests.swift */,
+			);
+			path = UITests;
 			sourceTree = "<group>";
 		};
 		698636BE497F8D0DF1EBD0A1 /* KeyboardExtension */ = {
@@ -86,6 +104,7 @@
 				698636BE497F8D0DF1EBD0A1 /* KeyboardExtension */,
 				AE6BB8CE294B01C26145EADA /* Shared */,
 				F3787CDE99C7E8A55C6807E2 /* Sources */,
+				67A4BE0E71FC6E0696FDBBA5 /* UITests */,
 				E6627DA39235EA8AECF8E591 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -103,6 +122,7 @@
 			children = (
 				A36B024EC8D33514A9296D11 /* PrisWubiApp.app */,
 				48AA36A1ED6E24C66EF41B4E /* PrisWubiKeyboard.appex */,
+				CB29750C72814D83C60B861B /* PrisWubiUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -119,6 +139,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		39B7EB23F16936DD05F3D007 /* PrisWubiUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1D1EB0FBBCFC381F7EA96386 /* Build configuration list for PBXNativeTarget "PrisWubiUITests" */;
+			buildPhases = (
+				A924D53D2FF1733343D190F2 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				92A755E463CA6D4666424AC7 /* PBXTargetDependency */,
+			);
+			name = PrisWubiUITests;
+			packageProductDependencies = (
+			);
+			productName = PrisWubiUITests;
+			productReference = CB29750C72814D83C60B861B /* PrisWubiUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		A5A0F07CAF62CD9A974077C0 /* PrisWubiKeyboard */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = B439BF9E41964DC0AE765972 /* Build configuration list for PBXNativeTarget "PrisWubiKeyboard" */;
@@ -168,6 +206,9 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
+					39B7EB23F16936DD05F3D007 = {
+						TestTargetID = D559B54E29D98A6C990822C9;
+					};
 				};
 			};
 			buildConfigurationList = 20514DBFDDD09B8BA7BB4F9B /* Build configuration list for PBXProject "PrisWubi" */;
@@ -186,6 +227,7 @@
 			targets = (
 				D559B54E29D98A6C990822C9 /* PrisWubiApp */,
 				A5A0F07CAF62CD9A974077C0 /* PrisWubiKeyboard */,
+				39B7EB23F16936DD05F3D007 /* PrisWubiUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -263,6 +305,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A924D53D2FF1733343D190F2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E6206E6B38C847EC62265FFA /* PrisWubiSimulatorUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D45BE97EA7C1AC6A58B07555 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -281,6 +331,11 @@
 			isa = PBXTargetDependency;
 			target = A5A0F07CAF62CD9A974077C0 /* PrisWubiKeyboard */;
 			targetProxy = E2DF63A31A7B3725DF5B7B7A /* PBXContainerItemProxy */;
+		};
+		92A755E463CA6D4666424AC7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D559B54E29D98A6C990822C9 /* PrisWubiApp */;
+			targetProxy = 9E8A507283E0FCAF1A7C2DF8 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -342,6 +397,7 @@
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -408,6 +464,7 @@
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -500,9 +557,54 @@
 			};
 			name = Release;
 		};
+		E637965621FCE86B80671B66 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.priswubi.ios.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = PrisWubiApp;
+			};
+			name = Debug;
+		};
+		FC5F8267FEFC3373E0C4A05E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.priswubi.ios.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = PrisWubiApp;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		1D1EB0FBBCFC381F7EA96386 /* Build configuration list for PBXNativeTarget "PrisWubiUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E637965621FCE86B80671B66 /* Debug */,
+				FC5F8267FEFC3373E0C4A05E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		20514DBFDDD09B8BA7BB4F9B /* Build configuration list for PBXProject "PrisWubi" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

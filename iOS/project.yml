@@ -9,6 +9,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    "EXCLUDED_ARCHS[sdk=iphonesimulator*]": "x86_64"
     SWIFT_OBJC_BRIDGING_HEADER: "$(PROJECT_DIR)/../Core/include/wubi_core.h"
     LIBRARY_SEARCH_PATHS:
       - "$(inherited)"
@@ -35,14 +36,26 @@ targets:
         buildPhase: resources
     info:
       path: HostApp/Info.plist
+      properties:
+        CFBundleDisplayName: 棱五笔
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     entitlements:
       path: HostApp/PrisWubiApp.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.priswubi.shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.priswubi.ios
         PRODUCT_NAME: PrisWubiApp
-        INFOPLIST_FILE: HostApp/Info.plist
-        CODE_SIGN_ENTITLEMENTS: HostApp/PrisWubiApp.entitlements
         TARGETED_DEVICE_FAMILY: "1,2"
     preBuildScripts:
       - name: Build Rust Wubi Core Staticlib
@@ -69,14 +82,27 @@ targets:
         buildPhase: resources
     info:
       path: KeyboardExtension/Info.plist
+      properties:
+        CFBundleDisplayName: 棱五笔
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: KeyboardViewController
+          NSExtensionAttributes:
+            IsASCIICapable: true
+            PrefersRightToLeft: false
+            PrimaryLanguage: zh-Hans
+            RequestsOpenAccess: true
     entitlements:
       path: KeyboardExtension/PrisWubiKeyboard.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.priswubi.shared
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.priswubi.ios.keyboard
         PRODUCT_NAME: PrisWubiKeyboard
-        INFOPLIST_FILE: KeyboardExtension/Info.plist
-        CODE_SIGN_ENTITLEMENTS: KeyboardExtension/PrisWubiKeyboard.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
         TARGETED_DEVICE_FAMILY: "1,2"
     preBuildScripts:
@@ -85,11 +111,28 @@ targets:
           sh "$PROJECT_DIR/Scripts/build-rust-ios.sh"
         basedOnDependencyAnalysis: false
 
+  PrisWubiUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: UITests
+    dependencies:
+      - target: PrisWubiApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.priswubi.ios.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: PrisWubiApp
+
 schemes:
   PrisWubiApp:
     build:
       targets:
         PrisWubiApp: all
         PrisWubiKeyboard: all
+    test:
+      targets:
+        - PrisWubiUITests
     run:
       config: Release

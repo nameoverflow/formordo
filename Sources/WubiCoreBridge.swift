@@ -1,6 +1,6 @@
 import Foundation
 
-public struct WubiCandidateItem: Codable, Identifiable, Equatable {
+public struct WubiCandidateItem: Codable, Identifiable, Equatable, Sendable {
     public let index: Int
     public let text: String
     public let comment: String
@@ -31,7 +31,7 @@ public struct WubiCandidateItem: Codable, Identifiable, Equatable {
     }
 }
 
-public struct TouchKeyCalibrationItem: Codable, Identifiable, Equatable {
+public struct TouchKeyCalibrationItem: Codable, Identifiable, Equatable, Sendable {
     public let key: String
     public let dx: Float
     public let dy: Float
@@ -39,7 +39,7 @@ public struct TouchKeyCalibrationItem: Codable, Identifiable, Equatable {
     public var id: String { key }
 }
 
-public struct WubiActionState: Codable, Equatable {
+public struct WubiActionState: Codable, Equatable, Sendable {
     public let consumed: Bool
     public let bell: Bool
     public let asciiMode: Bool
@@ -73,7 +73,7 @@ public struct WubiActionState: Codable, Equatable {
     )
 }
 
-public struct UserPhraseRecord: Codable, Identifiable, Equatable {
+public struct UserPhraseRecord: Codable, Identifiable, Equatable, Sendable {
     public let text: String
     public let code: String
     public let count: UInt32
@@ -81,7 +81,7 @@ public struct UserPhraseRecord: Codable, Identifiable, Equatable {
     public var id: String { text }
 }
 
-public struct WubiPreferences: Equatable {
+public struct WubiPreferences: Equatable, Sendable {
     public static let appGroupIdentifier = "group.com.priswubi.shared"
 
     public var schemaId: UInt32 = 86
@@ -233,7 +233,7 @@ public struct WubiPreferences: Equatable {
 public final class WubiBridge: ObservableObject {
     public static let shared = WubiBridge()
 
-    private var handle: OpaquePointer?
+    nonisolated(unsafe) private var handle: OpaquePointer?
     private let decoder = JSONDecoder()
 
     @Published public private(set) var state: WubiActionState = .empty

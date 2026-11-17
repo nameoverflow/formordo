@@ -54,10 +54,10 @@ final class IOSCandidateRibbonView: UIView {
 
             stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 14),
             stackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -14),
-            stackView.centerYAnchor.constraint(equalTo: scrollView.frameLayoutGuide.centerYAnchor, constant: 1),
+            stackView.centerYAnchor.constraint(equalTo: scrollView.frameLayoutGuide.centerYAnchor, constant: 2),
 
             divider.trailingAnchor.constraint(equalTo: chevronBtn.leadingAnchor),
-            divider.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
+            divider.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 2),
             divider.widthAnchor.constraint(equalToConstant: 0.7),
             divider.heightAnchor.constraint(equalToConstant: 21),
 
