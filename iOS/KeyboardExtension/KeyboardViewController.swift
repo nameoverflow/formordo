@@ -122,7 +122,7 @@ public final class KeyboardViewController: UIInputViewController {
         keyCanvas.onKeyTouchDown = { [weak self] spec in
             guard let self else { return }
             UIDevice.current.playInputClick()
-            if self.bridge.hasSharedContainerAccess {
+            if self.hasFullAccess {
                 self.lightHaptic.impactOccurred(intensity: 0.42)
             }
             switch spec.kind {
@@ -161,7 +161,7 @@ public final class KeyboardViewController: UIInputViewController {
             guard let self else { return }
             self.calloutView.isHidden = true
             self.layoutEngine.isTrackpadActive = active
-            if active && self.bridge.hasSharedContainerAccess {
+            if active && self.hasFullAccess {
                 self.selectionHaptic.selectionChanged()
             }
             self.refreshKeyboardLayout()
@@ -173,7 +173,7 @@ public final class KeyboardViewController: UIInputViewController {
                 return
             }
             self.textDocumentProxy.adjustTextPosition(byCharacterOffset: delta)
-            if self.bridge.hasSharedContainerAccess {
+            if self.hasFullAccess {
                 self.selectionHaptic.selectionChanged()
             }
         }

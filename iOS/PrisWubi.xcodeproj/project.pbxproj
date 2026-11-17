@@ -207,7 +207,14 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					39B7EB23F16936DD05F3D007 = {
+						ProvisioningStyle = Automatic;
 						TestTargetID = D559B54E29D98A6C990822C9;
+					};
+					A5A0F07CAF62CD9A974077C0 = {
+						ProvisioningStyle = Automatic;
+					};
+					D559B54E29D98A6C990822C9 = {
+						ProvisioningStyle = Automatic;
 					};
 				};
 			};
@@ -352,7 +359,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.priswubi.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hcyue.priswubi;
 				PRODUCT_NAME = PrisWubiApp;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -392,6 +399,7 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
@@ -459,6 +467,7 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -512,7 +521,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.priswubi.ios;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hcyue.priswubi;
 				PRODUCT_NAME = PrisWubiApp;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -531,7 +540,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.priswubi.ios.keyboard;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hcyue.priswubi.keyboard;
 				PRODUCT_NAME = PrisWubiKeyboard;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -550,7 +559,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.priswubi.ios.keyboard;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hcyue.priswubi.keyboard;
 				PRODUCT_NAME = PrisWubiKeyboard;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -568,7 +577,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.priswubi.ios.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hcyue.priswubi.uitests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = PrisWubiApp;
@@ -586,7 +595,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.priswubi.ios.uitests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.hcyue.priswubi.uitests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = PrisWubiApp;

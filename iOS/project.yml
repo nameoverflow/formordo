@@ -1,6 +1,6 @@
 name: PrisWubi
 options:
-  bundleIdPrefix: com.priswubi
+  bundleIdPrefix: com.hcyue.priswubi
   deploymentTarget:
     iOS: "16.0"
   xcodeVersion: "16.0"
@@ -9,6 +9,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    CODE_SIGN_STYLE: Automatic
     "EXCLUDED_ARCHS[sdk=iphonesimulator*]": "x86_64"
     SWIFT_OBJC_BRIDGING_HEADER: "$(PROJECT_DIR)/../Core/include/wubi_core.h"
     LIBRARY_SEARCH_PATHS:
@@ -45,16 +46,15 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
     entitlements:
       path: HostApp/PrisWubiApp.entitlements
-      properties:
-        com.apple.security.application-groups:
-          - group.com.priswubi.shared
+      properties: {}
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.priswubi.ios
+        PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.priswubi
         PRODUCT_NAME: PrisWubiApp
         TARGETED_DEVICE_FAMILY: "1,2"
     preBuildScripts:
@@ -96,12 +96,10 @@ targets:
             RequestsOpenAccess: true
     entitlements:
       path: KeyboardExtension/PrisWubiKeyboard.entitlements
-      properties:
-        com.apple.security.application-groups:
-          - group.com.priswubi.shared
+      properties: {}
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.priswubi.ios.keyboard
+        PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.priswubi.keyboard
         PRODUCT_NAME: PrisWubiKeyboard
         APPLICATION_EXTENSION_API_ONLY: YES
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -121,7 +119,7 @@ targets:
       - target: PrisWubiApp
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.priswubi.ios.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.priswubi.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: PrisWubiApp
 
