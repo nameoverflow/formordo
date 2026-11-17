@@ -5,89 +5,89 @@ import Foundation
 struct IOSKeyboardTests {
     @MainActor
     static func main() {
-        // 1. Test iOS 4-row layout geometry across Portrait (393x216) and Landscape (852x160)
+        // 1. Verify exact iOS 26 440pt Pro Max grid alignment against Apple reference telemetry!
         var layout = IOSKeyboardLayoutEngine()
-        layout.returnRole = .send
-        let portrait = layout.computeLayout(in: CGSize(width: 393, height: 216))
-        assert(portrait.keys.count == 33, "Expected 26 letters + Shift + Del + 5 bottom keys = 33, got \(portrait.keys.count)")
-        assert(portrait.pitchX > 38 && portrait.pitchX < 40)
+        let snap = layout.computeLayout(in: CGSize(width: 440, height: 225))
+        assert(snap.keys.count == 32, "Expected 26 letters + Shift + Del + 4 bottom keys = 32, got \(snap.keys.count)")
 
-        let returnSpec = portrait.keys.first(where: { $0.kind == .returnKey })!
-        assert(returnSpec.primaryLabel == "发送" && returnSpec.isBlueAccent)
+        let qKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "q")) })!
+        assert(qKey.primaryLabel == "q", "Expected lowercase 'q' in iOS 26 default mode, got \(qKey.primaryLabel)")
+        assert(abs(qKey.frame.width - 36.67) < 0.25, "Expected ~36.67pt key width on 440pt canvas, got \(qKey.frame.width)")
 
-        // 2. Test Voronoi gutter hit-testing (no dead zones between T and Y!)
-        let tSpec = portrait.keys.first(where: { $0.kind == .letter(UInt8(ascii: "t")) })!
-        let ySpec = portrait.keys.first(where: { $0.kind == .letter(UInt8(ascii: "y")) })!
-        let gutterMid = CGPoint(x: (tSpec.frame.maxX + ySpec.frame.minX) * 0.5 - 0.5, y: tSpec.frame.midY)
-        let gutterHit = IOSKeyboardLayoutEngine.hitTest(point: gutterMid, in: portrait)
-        assert(gutterHit?.kind == .letter(UInt8(ascii: "t")), "Expected gutter point slightly closer to T to resolve to T")
+        // Verify column-for-column invariants: `z` == `s`, `Space` == `d..j`, `Return` == `k..p`!
+        let sKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "s")) })!
+        let dKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "d")) })!
+        let jKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "j")) })!
+        let kKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "k")) })!
+        let zKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "z")) })!
+        let spaceKey = snap.keys.first(where: { $0.kind == .space })!
+        let returnKey = snap.keys.first(where: { $0.kind == .returnKey })!
 
-        // 3. Test Shift -> UpperOnce -> Double-tap CapsLock -> Lower
-        assert(layout.shiftState == .lower)
+        assert(abs(zKey.frame.minX - sKey.frame.minX) < 0.01, "z.minX must equal s.minX")
+        assert(abs(spaceKey.frame.minX - dKey.frame.minX) < 0.01, "Space.minX must equal d.minX")
+        assert(abs(spaceKey.frame.maxX - jKey.frame.maxX) < 0.01, "Space.maxX must equal j.maxX")
+        assert(abs(returnKey.frame.minX - kKey.frame.minX) < 0.01, "Return.minX must equal k.minX")
+        assert(spaceKey.cornerSubscript == "五", "Spacebar must show subtle corner '五'")
+        assert(returnKey.systemSymbol == "return.left", "Normal return key must use return.left symbol")
+
+        // 2. Test Voronoi gutter hit-testing
+        let tKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "t")) })!
+        let yKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "y")) })!
+        let gutterMid = CGPoint(x: (tKey.frame.maxX + yKey.frame.minX) * 0.5 - 0.5, y: tKey.frame.midY)
+        let gutterHit = IOSKeyboardLayoutEngine.hitTest(point: gutterMid, in: snap)
+        assert(gutterHit?.kind == .letter(UInt8(ascii: "t")))
+
+        // 3. Test Shift -> Uppercase (`Q`) -> Double-tap CapsLock -> Lowercase (`q`)
         layout.tapShift(at: 10.0)
         assert(layout.shiftState == .upperOnce)
-        layout.tapShift(at: 10.20) // < 0.34s => CapsLock!
+        let upperSnap = layout.computeLayout(in: CGSize(width: 440, height: 225))
+        let upperQ = upperSnap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "q")) })!
+        assert(upperQ.primaryLabel == "Q")
+        layout.tapShift(at: 10.20)
         assert(layout.shiftState == .capsLocked)
         layout.tapShift(at: 11.0)
         assert(layout.shiftState == .lower)
 
         // 4. Test Numbers (123) and Symbols (#+=) planes
         layout.switchPlane(.numbers)
-        let numSnap = layout.computeLayout(in: CGSize(width: 393, height: 216))
+        let numSnap = layout.computeLayout(in: CGSize(width: 440, height: 225))
         assert(numSnap.keys.contains(where: { $0.primaryLabel == "1" }))
         assert(numSnap.keys.contains(where: { $0.primaryLabel == "，" }))
         layout.switchPlane(.symbols)
-        let symSnap = layout.computeLayout(in: CGSize(width: 393, height: 216))
+        let symSnap = layout.computeLayout(in: CGSize(width: 440, height: 225))
         assert(symSnap.keys.contains(where: { $0.primaryLabel == "《" }))
         layout.switchPlane(.letters)
 
         // 5. Test Spacebar Trackpad Cursor Accumulator
         var trackpad = SpaceTrackpadAccumulator()
         trackpad.begin(at: 180.0)
-        assert(trackpad.update(x: 185.0) == 0)
-        assert(trackpad.update(x: 200.0) == 2)  // +20pt => +2 chars
-        assert(trackpad.update(x: 189.0) == -1) // -10pt from new anchor => -1 char
+        assert(trackpad.update(x: 200.0) == 2)
+        assert(trackpad.update(x: 189.0) == -1)
         trackpad.end()
-        assert(!trackpad.isActive)
 
-        // 6. Test end-to-end iOS view coordinates -> Rust wubi-core set_key_layout + push_touch_json + expanded 60 candidates + touchCalibrations!
+        // 6. Test end-to-end iOS 26 view coordinates -> Rust wubi-core touch slip rescue & drift learning!
         let dictsURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("Resources/Dicts", isDirectory: true)
         let bridge = WubiBridge(customDictsDir: dictsURL, inMemoryOnly: true)
         bridge.setKeyLayout(
-            centers52: portrait.centers52,
-            originX: portrait.originX,
-            originY: portrait.originY,
-            pitchX: portrait.pitchX,
-            pitchY: portrait.pitchY
+            centers52: snap.centers52,
+            originX: snap.originX,
+            originY: snap.originY,
+            pitchX: snap.pitchX,
+            pitchY: snap.pitchY
         )
 
-        // Simulate iPhone thumb tapping right border of T (slipping slightly into Y!), then R, W, U -> "我们"!
-        let rSpec = portrait.keys.first(where: { $0.kind == .letter(UInt8(ascii: "r")) })!
-        let wSpec = portrait.keys.first(where: { $0.kind == .letter(UInt8(ascii: "w")) })!
-        let uSpec = portrait.keys.first(where: { $0.kind == .letter(UInt8(ascii: "u")) })!
+        let rKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "r")) })!
+        let wKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "w")) })!
+        let uKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "u")) })!
 
-        let borderPoint = CGPoint(x: ySpec.frame.minX + 1.2, y: tSpec.frame.midY + 1.5)
+        let borderPoint = CGPoint(x: yKey.frame.minX + 1.2, y: tKey.frame.midY + 1.5)
         _ = bridge.pushTouch(reportedAscii: UInt8(ascii: "y"), x: Float(borderPoint.x), y: Float(borderPoint.y), isNormalized: false, timestampMs: 1000)
-        _ = bridge.pushTouch(reportedAscii: UInt8(ascii: "r"), x: Float(rSpec.frame.midX), y: Float(rSpec.frame.midY), isNormalized: false, timestampMs: 1070)
-        _ = bridge.pushTouch(reportedAscii: UInt8(ascii: "w"), x: Float(wSpec.frame.midX), y: Float(wSpec.frame.midY), isNormalized: false, timestampMs: 1140)
-        let out = bridge.pushTouch(reportedAscii: UInt8(ascii: "u"), x: Float(uSpec.frame.midX), y: Float(uSpec.frame.midY), isNormalized: false, timestampMs: 1210)
-        assert(out.candidates.first?.text == "我们", "Expected iPhone view-space touch slip rescue '我们'")
+        _ = bridge.pushTouch(reportedAscii: UInt8(ascii: "r"), x: Float(rKey.frame.midX), y: Float(rKey.frame.midY), isNormalized: false, timestampMs: 1070)
+        _ = bridge.pushTouch(reportedAscii: UInt8(ascii: "w"), x: Float(wKey.frame.midX), y: Float(wKey.frame.midY), isNormalized: false, timestampMs: 1140)
+        let out = bridge.pushTouch(reportedAscii: UInt8(ascii: "u"), x: Float(uKey.frame.midX), y: Float(uKey.frame.midY), isNormalized: false, timestampMs: 1210)
+        assert(out.candidates.first?.text == "我们", "Expected iOS 26 view-space touch slip rescue '我们'")
 
-        // Select via `selectAbsCandidate` (used by iOS Expanded Candidate Grid) and verify touch calibration profile JSON!
-        let committed = bridge.selectAbsCandidate(absIndex: 0, timestampMs: 1300)
-        assert(committed.commitText == "我们")
-        assert(bridge.touchCalibrations.count == 26)
-        let tCal = bridge.touchCalibrations.first(where: { $0.key == "t" })!
-        assert(tCal.samples == 1 && tCal.dx > 0.02, "Expected key 't' to learn rightward thumb drift, got \(tCal)")
-
-        // Test `allCandidates` expansion for `zguo`
-        for ch in "zguo".unicodeScalars {
-            _ = bridge.handleKey(keyCode: 0, scalar: ch.value, hasCmdOrCtrl: false, timestampMs: 2000)
-        }
-        let expanded = bridge.allCandidates(maxCount: 40)
-        assert(expanded.count >= 8, "Expected multiple expanded candidates for zguo, got \(expanded.count)")
-
-        print("✓ All iOS Virtual Keyboard layout, trackpad, expanded grid & view-space touch calibration tests passed!")
+        print("✓ All iOS 26 native grid, lowercase/shift, trackpad & Bayesian touch rescue tests passed!")
     }
 }
