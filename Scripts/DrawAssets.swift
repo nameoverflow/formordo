@@ -3,7 +3,7 @@ import CoreGraphics
 
 let args = CommandLine.arguments
 guard args.count >= 3 else {
-    fputs("Usage: DrawAssets <app-icon-png> <menu-icon-pdf>\n", stderr)
+    fputs("Usage: DrawAssets <app-icon-png> <menu-icon-pdf> [ios-icon-png]\n", stderr)
     exit(1)
 }
 
@@ -79,8 +79,8 @@ func drawNibEmblem(in ctx: CGContext, rect: CGRect, primary: CGColor, accent: CG
     ctx.restoreGState()
 }
 
-// 1. Render 1024x1024 macOS App Icon (素笺笔锋)
-do {
+// iOS supplies its own mask. Use the same emblem on an opaque, full-bleed tile.
+func renderIcon(to output: URL, forIOS: Bool) throws {
     let size = 1024
     let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil,
@@ -100,8 +100,8 @@ do {
     let ctx = nsCtx.cgContext
     let cs = CGColorSpaceCreateDeviceRGB()
 
-    let rect = CGRect(x: 96, y: 96, width: 832, height: 832)
-    let squircle = continuousSquirclePath(in: rect, radius: rect.width * 0.225)
+    let rect = forIOS ? CGRect(x: 0, y: 0, width: size, height: size) : CGRect(x: 96, y: 96, width: 832, height: 832)
+    let squircle = continuousSquirclePath(in: rect, radius: forIOS ? 0 : rect.width * 0.225)
 
     // Subtle macOS icon drop shadow
     ctx.saveGState()
@@ -140,14 +140,25 @@ do {
     ctx.addPath(squircle)
     ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.72))
     ctx.setLineWidth(6.0)
-    ctx.strokePath()
+    if !forIOS { ctx.strokePath() }
 
     ctx.restoreGState()
     NSGraphicsContext.restoreGraphicsState()
 
-    let png = rep.representation(using: .png, properties: [:])!
-    try png.write(to: iconOut)
+    var bitmap = rep
+    if forIOS {
+        let opaque = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8,
+                               bytesPerRow: size * 4, space: cs,
+                               bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        opaque.draw(rep.cgImage!, in: rect)
+        bitmap = NSBitmapImageRep(cgImage: opaque.makeImage()!)
+    }
+    let png = bitmap.representation(using: .png, properties: [:])!
+    try png.write(to: output)
 }
+
+try renderIcon(to: iconOut, forIOS: false)
+if args.count > 3 { try renderIcon(to: URL(fileURLWithPath: args[3]), forIOS: true) }
 
 // 2. Render 18x18 Vector Template PDF for macOS Menu Bar
 do {

@@ -5,6 +5,8 @@ import UIKit
 final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     var enableInputClicksWhenVisible: Bool { true }
 
+    var onEndLetterPreview: (() -> Void)?
+    var onLetterPress: ((IOSKeySpec, CGPoint) -> Void)?
     var onKeyTouchDown: ((IOSKeySpec) -> Void)?
     var onKeyTouchUp: ((IOSKeySpec, CGPoint) -> Void)?
     var onKeyTouchCancel: (() -> Void)?
@@ -13,6 +15,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     var onTrackpadStep: ((Int) -> Void)?
 
     private var snapshot: IOSKeyboardLayoutEngine.LayoutSnapshot?
+    private var letterHandledOnPress = false
     private var activeTouch: UITouch?
     private var activeKeyId: String? {
         didSet {
@@ -183,11 +186,16 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 RunLoop.main.add(timer, forMode: .common)
             }
             onKeyTouchDown?(hit)
+            if case .letter = hit.kind {
+                letterHandledOnPress = true
+                onLetterPress?(hit, point)
+            }
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let activeTouch, touches.contains(activeTouch), let snap = snapshot else { return }
+        guard !letterHandledOnPress else { return }
         let pt = activeTouch.location(in: self)
         if planeKeyId != nil {
             activeKeyId = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap)?.id
@@ -224,6 +232,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         let pt = touch.location(in: self)
         spaceHoldTimer?.invalidate()
         defer {
+            letterHandledOnPress = false
             planeKeyId = nil
             activeTouch = nil
             activeKeyId = nil
@@ -232,6 +241,10 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 trackpad.end()
                 onTrackpadStateChanged?(false)
             }
+        }
+        if letterHandledOnPress {
+            onEndLetterPreview?()
+            return
         }
         guard !trackpad.isActive,
               let snap = snapshot,
@@ -258,6 +271,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         spaceHoldTimer?.invalidate()
         if planeKeyId != nil { onRestorePlane?() }
         planeKeyId = nil
+        letterHandledOnPress = false
         self.activeTouch = nil
         activeKeyId = nil
         touchStartedOnSpace = false
@@ -314,10 +328,8 @@ final class IOSKeyCalloutView: UIView {
     func present(label: String, over keyFrameInSuperview: CGRect, dark: Bool) {
         dismissTimer?.invalidate()
         let gap: CGFloat = 5
-        let preferredHeight = max(65, keyFrameInSuperview.height * 1.44)
-        let bubbleH = min(preferredHeight, keyFrameInSuperview.minY - gap - 2)
-        let bubbleW = max(61.33, keyFrameInSuperview.width * 1.67) * bubbleH / preferredHeight
-        glyphLabel.font = .systemFont(ofSize: 36.5 * bubbleH / preferredHeight)
+        let bubbleH: CGFloat = 65
+        let bubbleW: CGFloat = 61.33
         let superW = superview?.bounds.width ?? 440
 
         let clampedX = min(

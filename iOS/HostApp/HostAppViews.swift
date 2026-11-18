@@ -106,20 +106,11 @@ public struct IOSHostRootView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     // Hero Banner
                     HStack(spacing: 14) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [Color.blue, Color.indigo],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .frame(width: 54, height: 54)
-                            Text("五")
-                                .font(.system(size: 28, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white)
-                        }
+                        Image("FormordoMark")
+                            .resizable()
+                            .frame(width: 54, height: 54)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("形序 Formordo")
                                 .font(.system(size: 20, weight: .bold))

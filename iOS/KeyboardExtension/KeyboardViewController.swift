@@ -12,6 +12,7 @@ public final class KeyboardViewController: UIInputViewController {
     private let expandedGrid = IOSExpandedCandidateView()
     private let calloutView = IOSKeyCalloutView()
 
+    private let previewHeadroom: CGFloat = 28
     private var heightConstraint: NSLayoutConstraint?
     private var saveUserDataTimer: Timer?
     private var backspaceTimer: Timer?
@@ -51,7 +52,7 @@ public final class KeyboardViewController: UIInputViewController {
         super.viewDidLayoutSubviews()
         let isLandscape = view.bounds.width > 540
         // 44pt candidate ribbon + 219pt 4-row keyboard (`keyH = 45pt`) = 263pt matching iOS 26 native height
-        let targetH: CGFloat = isLandscape ? 204 : 263
+        let targetH: CGFloat = (isLandscape ? 204 : 263) + previewHeadroom
         if heightConstraint?.constant != targetH {
             heightConstraint?.constant = targetH
         }
@@ -89,7 +90,7 @@ public final class KeyboardViewController: UIInputViewController {
         inputView.addSubview(expandedGrid)
         inputView.addSubview(calloutView)
 
-        let hc = inputView.heightAnchor.constraint(equalToConstant: 263)
+        let hc = inputView.heightAnchor.constraint(equalToConstant: 263 + previewHeadroom)
         hc.priority = .defaultHigh
         self.heightConstraint = hc
 
@@ -100,7 +101,7 @@ public final class KeyboardViewController: UIInputViewController {
             glassBackdrop.trailingAnchor.constraint(equalTo: inputView.trailingAnchor),
             glassBackdrop.bottomAnchor.constraint(equalTo: inputView.bottomAnchor),
 
-            ribbonView.topAnchor.constraint(equalTo: inputView.topAnchor),
+            ribbonView.topAnchor.constraint(equalTo: inputView.topAnchor, constant: previewHeadroom),
             ribbonView.leadingAnchor.constraint(equalTo: inputView.leadingAnchor),
             ribbonView.trailingAnchor.constraint(equalTo: inputView.trailingAnchor),
             ribbonView.heightAnchor.constraint(equalToConstant: IOSKeyboardLayoutEngine.candidateBarHeight),
@@ -125,7 +126,7 @@ public final class KeyboardViewController: UIInputViewController {
         keyCanvas.onKeyTouchDown = { [weak self] spec in
             guard let self else { return }
             UIDevice.current.playInputClick()
-            self.lightHaptic.impactOccurred()
+            self.lightHaptic.impactOccurred(intensity: 0.85)
             self.lightHaptic.prepare()
             switch spec.kind {
             case .letter:
@@ -164,6 +165,11 @@ public final class KeyboardViewController: UIInputViewController {
             self.calloutView.releasePreview()
             self.stopBackspaceRepeat()
             self.handleKeyRelease(spec: spec, pointInCanvas: rawPointInCanvas)
+        }
+
+        keyCanvas.onEndLetterPreview = { [weak self] in self?.calloutView.releasePreview() }
+        keyCanvas.onLetterPress = { [weak self] key, point in
+            self?.handleKeyRelease(spec: key, pointInCanvas: point)
         }
 
         keyCanvas.onTrackpadStateChanged = { [weak self] active in
