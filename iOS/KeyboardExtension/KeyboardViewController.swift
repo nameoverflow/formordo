@@ -187,6 +187,14 @@ public final class KeyboardViewController: UIInputViewController {
             }
         }
 
+        keyCanvas.onLetterPress = { [weak self] spec, point in
+            self?.handleKeyRelease(spec: spec, pointInCanvas: point)
+        }
+        keyCanvas.onEndLetterPreview = { [weak self] in
+            self?.keyCanvas.coveredCalloutKeyId = nil
+            self?.calloutView.releasePreview()
+        }
+
         keyCanvas.onKeySlidePreview = { [weak self] spec in
             guard let self else { return }
             if let spec {

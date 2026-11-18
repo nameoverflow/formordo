@@ -6,6 +6,12 @@ import UIKit
 private final class IOSRibbonSlotButton: UIButton {
     var slotIndex: Int = 0
     var starterWord: String?
+    private(set) var titleWidth: CGFloat = 0
+
+    func setRibbonTitle(_ title: NSAttributedString) {
+        configuration?.attributedTitle = AttributedString(title)
+        titleWidth = ceil(title.size().width) + 12
+    }
 
     override var isHighlighted: Bool {
         didSet {
@@ -41,7 +47,6 @@ final class IOSCandidateRibbonView: UIView {
     private let scrollView = UIScrollView()
     private let scrollMaskContainer = UIView()
     private let edgeFadeMask = CAGradientLayer()
-    private let stackView = UIStackView()
     private let divider = UIView()
     private let chevronBtn = UIButton(type: .system)
     private var slotButtons: [IOSRibbonSlotButton] = []
@@ -66,11 +71,6 @@ final class IOSCandidateRibbonView: UIView {
         scrollView.delaysContentTouches = false
         scrollView.canCancelContentTouches = true
 
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-        stackView.axis = .horizontal
-        stackView.spacing = 12
-        stackView.alignment = .center
-        scrollView.addSubview(stackView)
         scrollMaskContainer.addSubview(scrollView)
 
         edgeFadeMask.colors = [
@@ -107,10 +107,6 @@ final class IOSCandidateRibbonView: UIView {
             scrollView.topAnchor.constraint(equalTo: scrollMaskContainer.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: scrollMaskContainer.bottomAnchor),
 
-            stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 12),
-            stackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -16),
-            stackView.centerYAnchor.constraint(equalTo: scrollView.frameLayoutGuide.centerYAnchor, constant: 1),
-
             divider.trailingAnchor.constraint(equalTo: chevronBtn.leadingAnchor),
             divider.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
             divider.widthAnchor.constraint(equalToConstant: 0.65),
@@ -127,6 +123,12 @@ final class IOSCandidateRibbonView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        var x: CGFloat = 12
+        for button in slotButtons where !button.isHidden {
+            button.frame = CGRect(x: x, y: 1, width: button.titleWidth, height: scrollView.bounds.height)
+            x = button.frame.maxX + 12
+        }
+        scrollView.contentSize = CGSize(width: x + 4, height: scrollView.bounds.height)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         edgeFadeMask.frame = scrollMaskContainer.bounds
@@ -138,7 +140,7 @@ final class IOSCandidateRibbonView: UIView {
             let btn = IOSRibbonSlotButton(type: .custom)
             btn.addTarget(self, action: #selector(handleSlotTap(_:)), for: .touchUpInside)
             btn.isHidden = true
-            stackView.addArrangedSubview(btn)
+            scrollView.addSubview(btn)
             slotButtons.append(btn)
         }
     }
@@ -198,7 +200,7 @@ final class IOSCandidateRibbonView: UIView {
                                 .foregroundColor: textCol,
                             ]
                         )
-                        btn.configuration?.attributedTitle = AttributedString(attr)
+                        btn.setRibbonTitle(attr)
                         btn.isHidden = false
                     } else {
                         btn.isHidden = true
@@ -233,7 +235,7 @@ final class IOSCandidateRibbonView: UIView {
                                 )
                             )
                         }
-                        btn.configuration?.attributedTitle = AttributedString(attr)
+                        btn.setRibbonTitle(attr)
                         btn.isHidden = false
                     } else {
                         btn.isHidden = true
@@ -241,7 +243,7 @@ final class IOSCandidateRibbonView: UIView {
                 }
             }
             scrollView.setContentOffset(.zero, animated: false)
-            layoutIfNeeded()
+            setNeedsLayout()
         }
     }
 

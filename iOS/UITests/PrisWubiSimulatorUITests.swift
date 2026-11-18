@@ -18,8 +18,11 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         canvas.updateSnapshot(snapshot)
 
         var committed = ""
-        canvas.onKeyTouchUp = { spec, _ in
+        canvas.onLetterPress = { spec, _ in
             committed += spec.primaryLabel
+        }
+        canvas.onKeyTouchUp = { spec, _ in
+            XCTFail("Letter \(spec.primaryLabel) was delivered again on lift")
         }
 
         // 1. Overlapping two-thumb rollover (32 consecutive overlapping taps where finger N+1
@@ -69,6 +72,14 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         canvas.touchesMoved([flick], with: nil)
         canvas.touchesEnded([flick], with: nil)
         XCTAssertEqual(committed, "t", "Sub-85ms thumb lift-roll must stay locked on initial key 't'")
+
+        // UIKit can cancel a finger before lift when a system gesture wins.
+        committed = ""
+        flick.mockPoint = CGPoint(x: tKey.frame.midX, y: tKey.frame.midY)
+        canvas.touchesBegan([flick], with: nil)
+        XCTAssertEqual(committed, "t", "The letter must reach the engine on contact")
+        canvas.touchesCancelled([flick], with: nil)
+        XCTAssertEqual(committed, "t", "Cancellation must not drop or duplicate a registered letter")
     }
 
     @MainActor

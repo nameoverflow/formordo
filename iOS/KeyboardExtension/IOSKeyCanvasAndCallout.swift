@@ -352,6 +352,8 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     var enableInputClicksWhenVisible: Bool { true }
 
     var onKeyTouchDown: ((IOSKeySpec) -> Void)?
+    var onLetterPress: ((IOSKeySpec, CGPoint) -> Void)?
+    var onEndLetterPreview: (() -> Void)?
     var onKeySlidePreview: ((IOSKeySpec?) -> Void)?
     var onKeyTouchUp: ((IOSKeySpec, CGPoint) -> Void)?
     var onKeyTouchCancel: (() -> Void)?
@@ -360,7 +362,6 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     var onTrackpadMove: ((Int, Int) -> Void)?
 
     private struct TrackedTouch {
-        let touch: UITouch
         let beganTimestamp: TimeInterval
         let initialPoint: CGPoint
         var currentPoint: CGPoint
@@ -458,7 +459,12 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         for touch in ordered {
             // 1. Multi-touch Rollover: commit any earlier active non-slide touch in exact press order!
             let pendingIds = trackedTouches
-                .filter { !$0.value.committedByRollover && !$0.value.isPlaneSlide && !($0.value.startedOnSpace && trackpad.isActive) }
+                .filter {
+                    let state = $0.value
+                    if case .letter = state.initialKey.kind { return false }
+                    return !state.committedByRollover && !state.isPlaneSlide
+                        && !(state.startedOnSpace && trackpad.isActive)
+                }
                 .sorted(by: { $0.value.beganTimestamp < $1.value.beganTimestamp })
                 .map(\.key)
 
@@ -474,9 +480,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 let cleanPt = (oldState.currentKey.id == oldState.initialKey.id)
                     ? oldState.initialPoint
                     : oldState.currentPoint
-                if oldState.initialKey.kind != .backspace {
-                    onKeyTouchUp?(oldState.currentKey, cleanPt)
-                }
+                onKeyTouchUp?(oldState.currentKey, cleanPt)
             }
 
             // 2. Hit-test new touch against freshly updated snapshot & dynamic validNextMask
@@ -496,7 +500,6 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
             let isSpace = (hit.kind == .space)
 
             let state = TrackedTouch(
-                touch: touch,
                 beganTimestamp: touch.timestamp,
                 initialPoint: point,
                 currentPoint: point,
@@ -528,6 +531,9 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
 
             syncKeycapPressStates()
             onKeyTouchDown?(hit)
+            if case .letter = hit.kind {
+                onLetterPress?(hit, point)
+            }
         }
     }
 
@@ -536,6 +542,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         for touch in touches {
             let id = ObjectIdentifier(touch)
             guard var state = trackedTouches[id], !state.committedByRollover else { continue }
+            if case .letter = state.initialKey.kind { continue }
             let pt = touch.location(in: self)
             state.currentPoint = pt
 
@@ -614,6 +621,16 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 spaceHoldTimer?.invalidate()
                 spaceHoldTimer = nil
                 spaceHoldTouchId = nil
+            }
+
+            if case .letter = state.initialKey.kind {
+                let newestLetterStillDown = trackedTouches.values.contains { other in
+                    guard case .letter = other.initialKey.kind else { return false }
+                    return other.beganTimestamp > state.beganTimestamp
+                }
+                syncKeycapPressStates()
+                if !newestLetterStillDown { onEndLetterPreview?() }
+                continue
             }
 
             if state.committedByRollover {
