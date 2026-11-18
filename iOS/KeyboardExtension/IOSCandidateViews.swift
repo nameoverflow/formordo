@@ -4,7 +4,7 @@ import UIKit
 /// iOS 26 Native Airy Unboxed Candidate Bar (`52pt` height):
 /// - Zero pill boxes around candidates: clean `18pt` PingFang SC Regular text with `22pt` spacing
 /// - When idle (`preedit.isEmpty`), displays high-frequency starter words just like Apple native Wubi,
-///   with a thin right-hand vertical hairline and `⌄` chevron (tapping `⌄` while idle opens quick settings)
+///   with a thin right-hand vertical hairline and `⌄` chevron
 final class IOSCandidateRibbonView: UIView {
     var onSelectCandidate: ((Int) -> Void)?
     var onSelectStarterWord: ((String) -> Void)?
@@ -81,6 +81,8 @@ final class IOSCandidateRibbonView: UIView {
         let subtleCol: UIColor = dark ? UIColor(white: 0.62, alpha: 1.0) : UIColor(white: 0.45, alpha: 1.0)
         divider.backgroundColor = (dark ? UIColor.white : UIColor.black).withAlphaComponent(0.14)
         chevronBtn.tintColor = textCol
+        chevronBtn.isHidden = state.preedit.isEmpty
+        divider.isHidden = state.preedit.isEmpty
 
         stackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
@@ -94,6 +96,13 @@ final class IOSCandidateRibbonView: UIView {
                 stackView.addArrangedSubview(btn)
             }
         } else {
+            // Keep pending codes inside the keyboard. Some host editors commit marked
+            // text during rapid replacements, leaking the next word's first letter.
+            let code = UILabel()
+            code.text = state.preedit
+            code.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
+            code.textColor = subtleCol
+            stackView.addArrangedSubview(code)
             for (idx, item) in state.candidates.enumerated() {
                 let btn = UIButton(type: .system)
                 let attr = NSMutableAttributedString(
@@ -243,117 +252,4 @@ final class IOSExpandedCandidateView: UIView {
     }
 }
 
-/// Clean iOS 26 Quick Preferences tray (opened via `⌄` when idle or long-pressing mode key).
-final class IOSQuickPrefsView: UIView {
-    var onUpdatePrefs: ((WubiPreferences) -> Void)?
-    var onClose: (() -> Void)?
-
-    private var currentPrefs = WubiPreferences()
-    private let schemaSeg = UISegmentedControl(items: ["86 版", "98 版", "新世纪 (06)"])
-    private let auto4Switch = UISwitch()
-    private let push5Switch = UISwitch()
-    private let typoSwitch = UISwitch()
-    private let adaptSwitch = UISwitch()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setupLayout()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    private func setupLayout() {
-        let root = UIStackView()
-        root.translatesAutoresizingMaskIntoConstraints = false
-        root.axis = .vertical
-        root.spacing = 12
-        addSubview(root)
-
-        NSLayoutConstraint.activate([
-            root.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            root.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            root.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-        ])
-
-        let header = UIStackView()
-        header.axis = .horizontal
-        let title = UILabel()
-        title.text = "五笔版本与纠错设置"
-        title.font = .systemFont(ofSize: 14, weight: .semibold)
-        let doneBtn = UIButton(type: .system)
-        doneBtn.setTitle("完成", for: .normal)
-        doneBtn.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
-        doneBtn.addAction(UIAction { [weak self] _ in self?.onClose?() }, for: .touchUpInside)
-        header.addArrangedSubview(title)
-        header.addArrangedSubview(doneBtn)
-        root.addArrangedSubview(header)
-
-        schemaSeg.addTarget(self, action: #selector(changed), for: .valueChanged)
-        root.addArrangedSubview(schemaSeg)
-
-        let grid = UIStackView()
-        grid.axis = .horizontal
-        grid.distribution = .fillEqually
-        grid.spacing = 14
-
-        let leftCol = UIStackView(arrangedSubviews: [
-            makeSwitchRow("四码唯一上屏", sw: auto4Switch),
-            makeSwitchRow("第五码顶字", sw: push5Switch),
-        ])
-        leftCol.axis = .vertical
-        leftCol.spacing = 10
-
-        let rightCol = UIStackView(arrangedSubviews: [
-            makeSwitchRow("软热区误触纠正", sw: typoSwitch),
-            makeSwitchRow("个人热区校准", sw: adaptSwitch),
-        ])
-        rightCol.axis = .vertical
-        rightCol.spacing = 10
-
-        grid.addArrangedSubview(leftCol)
-        grid.addArrangedSubview(rightCol)
-        root.addArrangedSubview(grid)
-    }
-
-    private func makeSwitchRow(_ label: String, sw: UISwitch) -> UIView {
-        let row = UIStackView()
-        row.axis = .horizontal
-        row.alignment = .center
-        let l = UILabel()
-        l.text = label
-        l.font = .systemFont(ofSize: 13.5)
-        sw.transform = CGAffineTransform(scaleX: 0.82, y: 0.82)
-        sw.addTarget(self, action: #selector(changed), for: .valueChanged)
-        row.addArrangedSubview(l)
-        row.addArrangedSubview(sw)
-        return row
-    }
-
-    func configure(prefs: WubiPreferences, dark: Bool) {
-        currentPrefs = prefs
-        backgroundColor = .clear
-        schemaSeg.selectedSegmentIndex = (prefs.schemaId == 98) ? 1 : ((prefs.schemaId == 6) ? 2 : 0)
-        auto4Switch.isOn = prefs.fourthCodeAutoCommit
-        push5Switch.isOn = prefs.fifthCodePushCommit
-        typoSwitch.isOn = prefs.typoEnabled
-        adaptSwitch.isOn = prefs.touchHitboxAdapt
-    }
-
-    @objc private func changed() {
-        var p = currentPrefs
-        switch schemaSeg.selectedSegmentIndex {
-        case 1: p.schemaId = 98
-        case 2: p.schemaId = 6
-        default: p.schemaId = 86
-        }
-        p.fourthCodeAutoCommit = auto4Switch.isOn
-        p.fifthCodePushCommit = push5Switch.isOn
-        p.typoEnabled = typoSwitch.isOn
-        p.touchHitboxAdapt = adaptSwitch.isOn
-        currentPrefs = p
-        onUpdatePrefs?(p)
-    }
-}
 #endif

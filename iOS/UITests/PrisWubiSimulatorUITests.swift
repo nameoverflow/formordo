@@ -93,7 +93,7 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         //   Row 2 (z..m): midY ≈ 800pt -> dy = 0.837
         //   Row 3 (space): midY ≈ 856pt -> dy = 0.895
 
-        // 3. Hold `h` key (`dx = 0.598, dy = 0.778`) to capture real live iOS 26 callout bubble!
+        // 3. Hold the first-row `q` key (`dx = 0.598, dy = 0.778`) to capture real live iOS 26 callout bubble!
         Self.midPressShot = nil
         let timer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { _ in
             MainActor.assumeIsolated {
@@ -101,17 +101,17 @@ final class PrisWubiSimulatorUITests: XCTestCase {
             }
         }
         RunLoop.main.add(timer, forMode: .common)
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.598, dy: 0.778)).press(forDuration: 0.75)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.720)).press(forDuration: 0.75)
         Thread.sleep(forTimeInterval: 0.25)
         if let midShot = Self.midPressShot {
             let att = XCTAttachment(screenshot: midShot)
-            att.name = "03-live-priswubi-callout-h"
+            att.name = "03-live-priswubi-callout-q"
             att.lifetime = .keepAlways
             add(att)
         } else {
-            attachShot(name: "03-live-priswubi-callout-h-fallback")
+            attachShot(name: "03-live-priswubi-callout-q-fallback")
         }
-        // Clear the single `h` composition via backspace (`dx = 0.935, dy = 0.837`)
+        // Clear the single `q` composition via backspace (`dx = 0.935, dy = 0.837`)
         tapNorm(app, dx: 0.935, dy: 0.837)
         Thread.sleep(forTimeInterval: 0.25)
 
@@ -143,6 +143,21 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         tapNorm(app, dx: 0.500, dy: 0.895)
         Thread.sleep(forTimeInterval: 0.35)
 
+        // A fifth key commits the previous word and begins the next composition.
+        // This is the exact boundary that left a literal 't' in the phone recording.
+        let rows = ["qwertyuiop", "asdfghjkl", "zxcvbnm"]
+        for ch in "rtdgthtcs" {
+            for (row, letters) in rows.enumerated() {
+                guard let index = Array(letters).firstIndex(of: ch) else { continue }
+                let x = [0.05, 0.10, 0.20][row] + Double(index) * 0.10
+                tapNorm(app, dx: x, dy: [0.720, 0.778, 0.837][row])
+            }
+        }
+        let field = app.textFields.firstMatch
+        XCTAssertEqual(field.value as? String, "我们我们手感怎么")
+        attachShot(name: "continuous-input")
+        tapNorm(app, dx: 0.935, dy: 0.837) // discard pending s
+
         // 6. Tap `k-h-k` (`中 ⚡k`) so Simulator ends with live Wubi candidates & short-code hint on screen
         tapNorm(app, dx: 0.795, dy: 0.778) // k
         Thread.sleep(forTimeInterval: 0.18)
@@ -154,7 +169,31 @@ final class PrisWubiSimulatorUITests: XCTestCase {
 
         let tf = app.textFields.firstMatch
         let val = (tf.value as? String) ?? ""
-        XCTAssertTrue(val.hasPrefix("我们我们"), "Expected TextField to start with clean '我们我们' (no residual 'h'), got: \(val)")
+        XCTAssertEqual(val, "我们我们手感怎么", "Pending khk must stay in the keyboard")
+
+        // Change an option in the host, then open the keyboard in a fresh session.
+        app.launchArguments = []
+        app.launch()
+        app.buttons["输入设置"].tap()
+        let autoCommit = app.switches["四码唯一自动上屏"]
+        XCTAssertEqual(autoCommit.value as? String, "1")
+        autoCommit.tap()
+        attachShot(name: "host-settings")
+        defer {
+            app.launchArguments = []
+            app.launch()
+            app.buttons["输入设置"].tap()
+            if autoCommit.value as? String == "0" { autoCommit.tap() }
+        }
+        app.launchArguments = ["--autofocus"]
+        app.launch()
+        XCTAssertTrue(app.textFields.firstMatch.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 1)
+        for x in [0.450, 0.352, 0.155, 0.648] { tapNorm(app, dx: x, dy: 0.720) }
+        XCTAssertNotEqual(app.textFields.firstMatch.value as? String, "我们")
+        tapNorm(app, dx: 0.500, dy: 0.895)
+        XCTAssertEqual(app.textFields.firstMatch.value as? String, "我们")
+
     }
 
     @MainActor

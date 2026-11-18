@@ -38,5 +38,7 @@
 		<key>NSExtensionPrincipalClass</key>
 		<string>KeyboardViewController</string>
 	</dict>
+	<key>PrisWubiSettingsGroup</key>
+	<string>$(AppIdentifierPrefix)com.hcyue.priswubi.settings</string>
 </dict>
 </plist>

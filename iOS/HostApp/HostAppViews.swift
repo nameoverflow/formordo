@@ -14,7 +14,7 @@ public enum IOSHostTab: Int, CaseIterable, Identifiable {
     public var title: String {
         switch self {
         case .home: return "首页与试手"
-        case .typing: return "方案与输入"
+        case .typing: return "输入设置"
         case .typo: return "误触与热区"
         case .lexicon: return "个人词库"
         }
@@ -131,21 +131,6 @@ public struct IOSHostRootView: View {
                     }
                     .padding(.top, 4)
 
-                    // 1-Tap Schema Switcher Cards
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("五笔方案快速切换")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.secondary)
-
-                        HStack(spacing: 8) {
-                            compactSchemaButton(id: 86, name: "86 版", tag: "经典")
-                            compactSchemaButton(id: 98, name: "98 版", tag: "规范码元")
-                            compactSchemaButton(id: 6, name: "新世纪", tag: "06 国标")
-                        }
-                    }
-                    .padding(14)
-                    .background(iosCardBackground)
-
                     // Live Typing Test Box (placed near top so focusing never scrolls hero under status bar)
                     VStack(alignment: .leading, spacing: 8) {
                         Label("键盘实时试手区", systemImage: "character.cursor.ibeam")
@@ -173,7 +158,7 @@ public struct IOSHostRootView: View {
 
                         stepLine(num: "1", text: "进入「设置 → 通用 → 键盘 → 键盘 → 添加新键盘」")
                         stepLine(num: "2", text: "在第三方键盘中选择「棱五笔」即可离线极速盲打")
-                        stepLine(num: "3", text: "可选开启「允许完全访问」以启用按键轻触震动与宿主词库同步")
+                        stepLine(num: "3", text: "按键振动需开启「允许完全访问」。方案和输入选项可在本 App 中设置。")
 
                         Button {
                             openSystemKeyboardSettings()
@@ -210,9 +195,24 @@ public struct IOSHostRootView: View {
     // MARK: - Tab 2: Typing & Schema Rules
 
     private var typingTab: some View {
-        iosScreenContainer(title: "方案与输入") {
+        iosScreenContainer(title: "输入设置") {
             ScrollView {
                 VStack(spacing: 14) {
+                    // 1-Tap Schema Switcher Cards
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("五笔方案快速切换")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 8) {
+                            compactSchemaButton(id: 86, name: "86 版", tag: "经典")
+                            compactSchemaButton(id: 98, name: "98 版", tag: "规范码元")
+                            compactSchemaButton(id: 6, name: "新世纪", tag: "06 国标")
+                        }
+                    }
+                    .padding(14)
+                    .background(iosCardBackground)
+
                     VStack(spacing: 12) {
                         iosToggleRow("四码唯一自动上屏", sub: "精确四码唯一匹配时直接上屏", isOn: binding(\.fourthCodeAutoCommit))
                         Divider()
@@ -452,8 +452,9 @@ public struct IOSHostRootView: View {
             }
             Spacer()
             #if os(iOS)
-            Toggle("", isOn: isOn)
+            Toggle(title, isOn: isOn)
                 .labelsHidden()
+                .accessibilityLabel(title)
             #else
             Button {
                 isOn.wrappedValue.toggle()

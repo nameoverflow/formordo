@@ -10,12 +10,13 @@ public final class KeyboardViewController: UIInputViewController {
     private let ribbonView = IOSCandidateRibbonView()
     private let keyCanvas = IOSKeyCanvasView()
     private let expandedGrid = IOSExpandedCandidateView()
-    private let quickPrefsView = IOSQuickPrefsView()
     private let calloutView = IOSKeyCalloutView()
 
     private var heightConstraint: NSLayoutConstraint?
+    private var saveUserDataTimer: Timer?
     private var backspaceTimer: Timer?
     private var backspaceHoldTicks: Int = 0
+    private var lastLayout: (IOSKeyboardLayoutEngine, CGSize)?
     private let lightHaptic = UIImpactFeedbackGenerator(style: .light)
     private let selectionHaptic = UISelectionFeedbackGenerator()
 
@@ -27,6 +28,7 @@ public final class KeyboardViewController: UIInputViewController {
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        if hasFullAccess { lightHaptic.prepare() }
         bridge.loadConfigAndUser()
         syncEngineToUI()
     }
@@ -34,6 +36,8 @@ public final class KeyboardViewController: UIInputViewController {
     public override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         stopBackspaceRepeat()
+        saveUserDataTimer?.invalidate()
+        bridge.clearComposition()
         bridge.flushUserDataIfNeeded()
     }
 
@@ -69,17 +73,14 @@ public final class KeyboardViewController: UIInputViewController {
         keyCanvas.translatesAutoresizingMaskIntoConstraints = false
         keyCanvas.accessibilityIdentifier = "PrisWubiKeyCanvas"
         expandedGrid.translatesAutoresizingMaskIntoConstraints = false
-        quickPrefsView.translatesAutoresizingMaskIntoConstraints = false
 
         expandedGrid.isHidden = true
-        quickPrefsView.isHidden = true
         calloutView.isHidden = true
 
         inputView.addSubview(glassBackdrop)
         inputView.addSubview(ribbonView)
         inputView.addSubview(keyCanvas)
         inputView.addSubview(expandedGrid)
-        inputView.addSubview(quickPrefsView)
         inputView.addSubview(calloutView)
 
         let hc = inputView.heightAnchor.constraint(equalToConstant: 263)
@@ -108,10 +109,6 @@ public final class KeyboardViewController: UIInputViewController {
             expandedGrid.trailingAnchor.constraint(equalTo: inputView.trailingAnchor),
             expandedGrid.bottomAnchor.constraint(equalTo: inputView.bottomAnchor),
 
-            quickPrefsView.topAnchor.constraint(equalTo: ribbonView.bottomAnchor),
-            quickPrefsView.leadingAnchor.constraint(equalTo: inputView.leadingAnchor),
-            quickPrefsView.trailingAnchor.constraint(equalTo: inputView.trailingAnchor),
-            quickPrefsView.bottomAnchor.constraint(equalTo: inputView.bottomAnchor),
         ])
 
         wireCallbacks()
@@ -123,7 +120,8 @@ public final class KeyboardViewController: UIInputViewController {
             guard let self else { return }
             UIDevice.current.playInputClick()
             if self.hasFullAccess {
-                self.lightHaptic.impactOccurred(intensity: 0.42)
+                self.lightHaptic.impactOccurred(intensity: 0.24)
+                self.lightHaptic.prepare()
             }
             switch spec.kind {
             case .letter:
@@ -132,10 +130,11 @@ public final class KeyboardViewController: UIInputViewController {
                     self.calloutView.present(label: spec.primaryLabel, over: frameInRoot, dark: self.isDarkAppearance)
                 }
             case .backspace:
+                self.calloutView.isHidden = true
                 self.performBackspace()
                 self.startBackspaceRepeat()
             default:
-                break
+                self.calloutView.isHidden = true
             }
         }
 
@@ -146,15 +145,9 @@ public final class KeyboardViewController: UIInputViewController {
 
         keyCanvas.onKeyTouchUp = { [weak self] spec, rawPointInCanvas in
             guard let self else { return }
-            self.calloutView.isHidden = true
+            self.calloutView.releasePreview()
             self.stopBackspaceRepeat()
             self.handleKeyRelease(spec: spec, pointInCanvas: rawPointInCanvas)
-        }
-
-        keyCanvas.onModeKeyLongPress = { [weak self] in
-            guard let self else { return }
-            UIDevice.current.playInputClick()
-            self.toggleQuickPrefs()
         }
 
         keyCanvas.onTrackpadStateChanged = { [weak self] active in
@@ -194,18 +187,14 @@ public final class KeyboardViewController: UIInputViewController {
         ribbonView.onTapChevron = { [weak self] in
             guard let self else { return }
             UIDevice.current.playInputClick()
-            if self.bridge.state.preedit.isEmpty {
-                self.toggleQuickPrefs()
-            } else {
-                self.quickPrefsView.isHidden = true
-                self.expandedGrid.isHidden.toggle()
-                let isExp = !self.expandedGrid.isHidden
-                self.keyCanvas.isHidden = isExp
-                if isExp {
-                    self.expandedGrid.reload(candidates: self.bridge.allCandidates(maxCount: 60), dark: self.isDarkAppearance)
-                }
-                self.ribbonView.setExpanded(isExp)
+            guard !self.bridge.state.preedit.isEmpty else { return }
+            self.expandedGrid.isHidden.toggle()
+            let isExp = !self.expandedGrid.isHidden
+            self.keyCanvas.isHidden = isExp
+            if isExp {
+                self.expandedGrid.reload(candidates: self.bridge.allCandidates(maxCount: 60), dark: self.isDarkAppearance)
             }
+            self.ribbonView.setExpanded(isExp)
         }
 
         expandedGrid.onSelectAbsCandidate = { [weak self] absIdx in
@@ -239,35 +228,12 @@ public final class KeyboardViewController: UIInputViewController {
 
         expandedGrid.onClear = { [weak self] in
             self?.bridge.clearComposition()
-            self?.clearMarkedTextSafely()
             self?.expandedGrid.isHidden = true
             self?.keyCanvas.isHidden = false
             self?.ribbonView.setExpanded(false)
             self?.syncEngineToUI()
         }
 
-        quickPrefsView.onUpdatePrefs = { [weak self] updated in
-            guard let self else { return }
-            self.bridge.applyAndSavePreferences(updated)
-            self.syncEngineToUI()
-        }
-
-        quickPrefsView.onClose = { [weak self] in
-            self?.quickPrefsView.isHidden = true
-            self?.keyCanvas.isHidden = false
-            self?.ribbonView.setExpanded(false)
-        }
-    }
-
-    private func toggleQuickPrefs() {
-        expandedGrid.isHidden = true
-        quickPrefsView.isHidden.toggle()
-        let open = !quickPrefsView.isHidden
-        keyCanvas.isHidden = open
-        ribbonView.setExpanded(open)
-        if open {
-            quickPrefsView.configure(prefs: bridge.prefs, dark: isDarkAppearance)
-        }
     }
 
     private func handleKeyRelease(spec: IOSKeySpec, pointInCanvas: CGPoint) {
@@ -337,16 +303,8 @@ public final class KeyboardViewController: UIInputViewController {
         }
     }
 
-    private func clearMarkedTextSafely() {
-        // In UIKit's UITextDocumentProxy, bare `unmarkText()` commits the marked string in place!
-        // Setting empty marked text first removes the inline raw preedit before unmarking.
-        textDocumentProxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
-        textDocumentProxy.unmarkText()
-    }
-
     private func commitPendingFirstIfComposing() {
         guard !bridge.state.preedit.isEmpty else { return }
-        clearMarkedTextSafely()
         if let first = bridge.state.candidates.first?.text {
             textDocumentProxy.insertText(first)
         } else {
@@ -387,25 +345,16 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func applyEngineState(_ out: WubiActionState) {
         if !out.commitText.isEmpty {
-            clearMarkedTextSafely()
             textDocumentProxy.insertText(out.commitText)
-            bridge.flushUserDataIfNeeded()
+            saveUserDataTimer?.invalidate()
+            saveUserDataTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.bridge.flushUserDataIfNeeded() }
+            }
         }
-        // Inline marked text directly in the iOS input field matching native Wubi!
-        if out.preedit.isEmpty {
-            if out.commitText.isEmpty {
-                clearMarkedTextSafely()
-            }
-            if !expandedGrid.isHidden {
-                expandedGrid.isHidden = true
-                keyCanvas.isHidden = false
-                ribbonView.setExpanded(false)
-            }
-        } else {
-            textDocumentProxy.setMarkedText(
-                out.preedit,
-                selectedRange: NSRange(location: out.preedit.utf16.count, length: 0)
-            )
+        if out.preedit.isEmpty && !expandedGrid.isHidden {
+            expandedGrid.isHidden = true
+            keyCanvas.isHidden = false
+            ribbonView.setExpanded(false)
         }
         syncEngineToUI()
     }
@@ -435,6 +384,8 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func refreshKeyboardLayout() {
         guard keyCanvas.bounds.width > 10, keyCanvas.bounds.height > 10 else { return }
+        if let (previous, size) = lastLayout, previous == layoutEngine, size == keyCanvas.bounds.size { return }
+        lastLayout = (layoutEngine, keyCanvas.bounds.size)
         let snap = layoutEngine.computeLayout(in: keyCanvas.bounds.size)
         keyCanvas.updateSnapshot(snap)
         bridge.setKeyLayout(

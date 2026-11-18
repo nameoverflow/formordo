@@ -52,7 +52,7 @@ public enum IOSKeyKind: Equatable {
     case backspace
     case planeSwitch(IOSKeyPlane, label: String)
     case globe
-    case modeToggle // 中/英切换（长按切 86/98/新世纪）
+    case modeToggle // 中/英切换
     case space
     case returnKey
 }
@@ -94,7 +94,7 @@ public struct IOSKeySpec: Identifiable, Equatable {
 ///   * Bottom row `[123]` + `[中/英]` right edge == `s.maxX`
 ///   * `Space.minX == d.minX`, `Space.maxX == j.maxX`, `Space` carries only subtle bottom-right `"五"`
 ///   * `Return.minX == k.minX`, `Return.maxX == p.maxX`, displays `return.left` symbol when normal
-public struct IOSKeyboardLayoutEngine {
+public struct IOSKeyboardLayoutEngine: Equatable {
     public static let keyCornerRadius: CGFloat = 8.5
     public static let trayTopCornerRadius: CGFloat = 26.0
     public static let candidateBarHeight: CGFloat = 44.0

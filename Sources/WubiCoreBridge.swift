@@ -1,3 +1,35 @@
+#if os(iOS)
+import Security
+
+// The Personal Team profile grants shared keychain groups for this team's apps.
+private enum IOSSharedSettings {
+    static var query: [String: Any]? {
+        guard let group = Bundle.main.object(forInfoDictionaryKey: "PrisWubiSettingsGroup") as? String else { return nil }
+        return [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "PrisWubi",
+                kSecAttrAccount as String: "input-settings", kSecAttrAccessGroup as String: group]
+    }
+
+    static func read() -> String? {
+        guard var query else { return nil }
+        query[kSecReturnData as String] = true
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func write(_ toml: String) {
+        guard var query else { return }
+        let data = Data(toml.utf8)
+        let update = [kSecValueData as String: data]
+        if SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecItemNotFound {
+            query[kSecValueData as String] = data
+            query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            SecItemAdd(query as CFDictionary, nil)
+        }
+    }
+}
+#endif
 import Foundation
 
 public struct WubiCandidateItem: Codable, Identifiable, Equatable, Sendable {
@@ -328,6 +360,11 @@ public final class WubiBridge: ObservableObject {
         if FileManager.default.fileExists(atPath: userDataURL.path) {
             _ = userDataURL.path.withCString { wubi_engine_load_user_data(h, $0) }
         }
+        #if os(iOS)
+        if let shared = IOSSharedSettings.read() {
+            shared.withCString { wubi_engine_set_config_toml(h, $0) }
+        }
+        #endif
         let toml = takeString(wubi_engine_get_config_toml(h))
         self.prefs = WubiPreferences.fromTOML(toml)
         refreshState()
@@ -341,6 +378,9 @@ public final class WubiBridge: ObservableObject {
         let toml = newPrefs.toTOML()
         toml.withCString { wubi_engine_set_config_toml(h, $0) }
         if persist {
+            #if os(iOS)
+            IOSSharedSettings.write(toml)
+            #endif
             _ = configURL.path.withCString { wubi_engine_save_config(h, $0) }
         }
         refreshState()

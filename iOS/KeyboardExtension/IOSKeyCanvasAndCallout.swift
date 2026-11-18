@@ -8,22 +8,20 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     var onKeyTouchDown: ((IOSKeySpec) -> Void)?
     var onKeyTouchUp: ((IOSKeySpec, CGPoint) -> Void)?
     var onKeyTouchCancel: (() -> Void)?
-    var onModeKeyLongPress: (() -> Void)?
     var onTrackpadStateChanged: ((Bool) -> Void)?
     var onTrackpadStep: ((Int) -> Void)?
 
     private var snapshot: IOSKeyboardLayoutEngine.LayoutSnapshot?
+    private var activeTouch: UITouch?
     private var activeKeyId: String?
     private var touchStartPoint: CGPoint = .zero
     private var touchStartedOnSpace: Bool = false
     private var trackpad = SpaceTrackpadAccumulator()
     private var isDark: Bool = false
-    private var modeLongPressTimer: Timer?
-    private var didTriggerLongPress: Bool = false
 
     init() {
         super.init(frame: .zero, inputViewStyle: .keyboard)
-        isMultipleTouchEnabled = false
+        isMultipleTouchEnabled = true
         backgroundColor = .clear
     }
 
@@ -150,35 +148,22 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let snap = snapshot, let pt = touches.first?.location(in: self) else { return }
-        touchStartPoint = pt
-        didTriggerLongPress = false
-        modeLongPressTimer?.invalidate()
-
-        if let hit = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap) {
+        for touch in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
+            if let previous = activeTouch { finishTouch(previous) }
+            let point = touch.location(in: self)
+            guard let snapshot, let hit = IOSKeyboardLayoutEngine.hitTest(point: point, in: snapshot) else { continue }
+            activeTouch = touch
+            touchStartPoint = point
             activeKeyId = hit.id
-            touchStartedOnSpace = (hit.kind == .space)
+            touchStartedOnSpace = hit.kind == .space
             setNeedsDisplay()
             onKeyTouchDown?(hit)
-
-            if hit.kind == .modeToggle {
-                modeLongPressTimer = Timer.scheduledTimer(withTimeInterval: 0.42, repeats: false) { [weak self] _ in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        self.didTriggerLongPress = true
-                        self.onModeKeyLongPress?()
-                    }
-                }
-            }
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let snap = snapshot, let pt = touches.first?.location(in: self) else { return }
-        if hypot(pt.x - touchStartPoint.x, pt.y - touchStartPoint.y) > 8 {
-            modeLongPressTimer?.invalidate()
-        }
-
+        guard let activeTouch, touches.contains(activeTouch), let snap = snapshot else { return }
+        let pt = activeTouch.location(in: self)
         if touchStartedOnSpace {
             if !trackpad.isActive && abs(pt.x - touchStartPoint.x) >= 10.0 {
                 trackpad.begin(at: pt.x)
@@ -196,19 +181,24 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         }
 
         if let hit = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap), hit.id != activeKeyId {
+            onKeyTouchCancel?()
             activeKeyId = hit.id
             setNeedsDisplay()
             if case .letter = hit.kind {
                 onKeyTouchDown?(hit)
-            } else {
-                onKeyTouchCancel?()
             }
         }
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        modeLongPressTimer?.invalidate()
+        guard let activeTouch, touches.contains(activeTouch) else { return }
+        finishTouch(activeTouch)
+    }
+
+    private func finishTouch(_ touch: UITouch) {
+        let pt = touch.location(in: self)
         defer {
+            activeTouch = nil
             activeKeyId = nil
             touchStartedOnSpace = false
             if trackpad.isActive {
@@ -217,12 +207,8 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
             }
             setNeedsDisplay()
         }
-        if didTriggerLongPress {
-            return
-        }
         guard !trackpad.isActive,
               let snap = snapshot,
-              let pt = touches.first?.location(in: self),
               let hit = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap) else {
             onKeyTouchCancel?()
             return
@@ -231,7 +217,8 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        modeLongPressTimer?.invalidate()
+        guard let activeTouch, touches.contains(activeTouch) else { return }
+        self.activeTouch = nil
         activeKeyId = nil
         touchStartedOnSpace = false
         if trackpad.isActive {
@@ -275,7 +262,17 @@ final class IOSKeyCalloutView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private var dismissTimer: Timer?
+
+    func releasePreview() {
+        dismissTimer?.invalidate()
+        dismissTimer = Timer.scheduledTimer(withTimeInterval: 0.065, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.isHidden = true }
+        }
+    }
+
     func present(label: String, over keyFrameInSuperview: CGRect, dark: Bool) {
+        dismissTimer?.invalidate()
         let bubbleW = max(61.33, keyFrameInSuperview.width * 1.67)
         let bubbleH = max(65.0, keyFrameInSuperview.height * 1.44)
         let superW = superview?.bounds.width ?? 440
@@ -286,7 +283,7 @@ final class IOSKeyCalloutView: UIView {
         )
         // Hover 3.67pt above keyFrame.minY; if superview clips top edge (Row 0), clamp softly to 1.5pt
         let rawY = keyFrameInSuperview.minY - 3.67 - bubbleH
-        let finalY = (superview?.clipsToBounds == true) ? max(1.5, rawY) : rawY
+        let finalY = max(2, rawY)
 
         frame = CGRect(x: clampedX, y: finalY, width: bubbleW, height: bubbleH)
         cardView.frame = bounds

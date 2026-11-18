@@ -38,6 +38,7 @@ targets:
     info:
       path: HostApp/Info.plist
       properties:
+        PrisWubiSettingsGroup: $(AppIdentifierPrefix)com.hcyue.priswubi.settings
         CFBundleDisplayName: 棱五笔
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
@@ -51,7 +52,9 @@ targets:
           - UIInterfaceOrientationLandscapeRight
     entitlements:
       path: HostApp/PrisWubiApp.entitlements
-      properties: {}
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.hcyue.priswubi.settings
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.priswubi
@@ -83,6 +86,7 @@ targets:
     info:
       path: KeyboardExtension/Info.plist
       properties:
+        PrisWubiSettingsGroup: $(AppIdentifierPrefix)com.hcyue.priswubi.settings
         CFBundleDisplayName: 棱五笔
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
@@ -96,7 +100,9 @@ targets:
             RequestsOpenAccess: true
     entitlements:
       path: KeyboardExtension/PrisWubiKeyboard.entitlements
-      properties: {}
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.hcyue.priswubi.settings
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.priswubi.keyboard
