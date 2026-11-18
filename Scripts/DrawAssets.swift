@@ -44,17 +44,29 @@ func drawNibEmblem(in ctx: CGContext, rect: CGRect, primary: CGColor, accent: CG
     nib.closeSubpath()
 
     if isMenu {
-        ctx.addPath(nib)
+        // Outer rounded-square keycap matching Apple native input method menu icons
+        let framePath = continuousSquirclePath(in: CGRect(x: 6, y: 9, width: 88, height: 82), radius: 20)
+        ctx.addPath(framePath)
         ctx.setStrokeColor(primary)
-        ctx.setLineWidth(8.5)
+        ctx.setLineWidth(7.5)
         ctx.strokePath()
 
-        ctx.move(to: CGPoint(x: 50, y: 84))
-        ctx.addLine(to: CGPoint(x: 50, y: 50))
-        ctx.strokePath()
+        // Pure-vector even-odd nib silhouette with hollow ink slit & breather eye (no blend modes in PDF)
+        let nibCutout = CGMutablePath()
+        nibCutout.move(to: CGPoint(x: 50, y: 74))
+        nibCutout.addLine(to: CGPoint(x: 70, y: 46))
+        nibCutout.addLine(to: CGPoint(x: 63, y: 26))
+        nibCutout.addLine(to: CGPoint(x: 37, y: 26))
+        nibCutout.addLine(to: CGPoint(x: 30, y: 46))
+        nibCutout.closeSubpath()
 
+        // Inner slit + breather circle as non-overlapping subpaths for clean even-odd cutout
+        nibCutout.addPath(continuousSquirclePath(in: CGRect(x: 47.2, y: 53.0, width: 5.6, height: 15.0), radius: 2.0))
+        nibCutout.addEllipse(in: CGRect(x: 43.5, y: 39.0, width: 13.0, height: 13.0))
+
+        ctx.addPath(nibCutout)
         ctx.setFillColor(primary)
-        ctx.fillEllipse(in: CGRect(x: 43.5, y: 39.5, width: 13, height: 13))
+        ctx.fillPath(using: .evenOdd)
     } else {
         ctx.addPath(nib)
         ctx.setFillColor(primary)
@@ -165,10 +177,9 @@ do {
     final class MenuIconView: NSView {
         override func draw(_ dirtyRect: NSRect) {
             guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-            let inset = bounds.insetBy(dx: 2.0, dy: 2.0)
             drawNibEmblem(
                 in: ctx,
-                rect: inset,
+                rect: bounds,
                 primary: NSColor.black.cgColor,
                 accent: NSColor.black.cgColor,
                 isMenu: true
