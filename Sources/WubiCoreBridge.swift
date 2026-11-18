@@ -467,12 +467,14 @@ public final class WubiBridge: ObservableObject {
         }
     }
 
-    public func flushUserDataIfNeeded() {
+    public func flushUserDataIfNeeded(refreshPublishedLists: Bool = true) {
         guard let h = handle else { return }
         if wubi_engine_is_user_dirty(h) {
             _ = userDataURL.path.withCString { wubi_engine_save_user_data(h, $0) }
-            refreshUserPhrases()
-            refreshTouchProfile()
+            if refreshPublishedLists {
+                refreshUserPhrases()
+                refreshTouchProfile()
+            }
         }
     }
 
@@ -508,7 +510,6 @@ public final class WubiBridge: ObservableObject {
         let json = takeString(wubi_engine_select_candidate_json(h, UInt32(max(0, pageRelIndex)), timestampMs))
         let decoded = decodeState(json)
         self.state = decoded
-        refreshTouchProfile()
         return decoded
     }
 
@@ -517,7 +518,6 @@ public final class WubiBridge: ObservableObject {
         let json = takeString(wubi_engine_select_abs_candidate_json(h, UInt32(max(0, absIndex)), timestampMs))
         let decoded = decodeState(json)
         self.state = decoded
-        refreshTouchProfile()
         return decoded
     }
 

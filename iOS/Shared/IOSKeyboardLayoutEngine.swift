@@ -453,15 +453,15 @@ public struct IOSKeyboardLayoutEngine: Equatable {
         in snapshot: LayoutSnapshot,
         validNextMask: UInt32 = 0x03FF_FFFF
     ) -> IOSKeySpec? {
-        guard snapshot.bounds.insetBy(dx: -12, dy: -14).contains(point) else {
+        guard snapshot.bounds.insetBy(dx: -16, dy: -16).contains(point) else {
             return nil
         }
 
-        // Apply ergonomic upward compensation in the 3 letter/symbol rows so natural thumb pads
-        // landing slightly below visual keycap centers don't slip into the row underneath.
+        // Apply ergonomic upward compensation strictly inside the 3 letter/symbol rows (never on Row 3
+        // `Space`/`123`/`Return`, so top-edge Space taps never get pulled into `c`/`v`/`b`/`n`!).
         var qPt = point
         let row0MidY = CGFloat(snapshot.originY)
-        if point.y > row0MidY && point.y < snapshot.bottomRowMinY + 5.5 {
+        if point.y > row0MidY && point.y < snapshot.bottomRowMinY - 2.5 {
             qPt.y -= ergonomicThumbYBias
         }
 
@@ -475,16 +475,22 @@ public struct IOSKeyboardLayoutEngine: Equatable {
 
         var best: IOSKeySpec?
         var bestScore = CGFloat.greatestFiniteMagnitude
+        let maxLetterBottomY = snapshot.bottomRowMinY - 4.0
 
         for k in snapshot.keys {
             var effRect = k.frame
+            var deadKeyPenalty: CGFloat = 0
             if hasDynamicWeights, case .letter(let ascii) = k.kind, ascii >= 97, ascii <= 122 {
                 let bit = UInt32(1) << UInt32(ascii - 97)
                 if (validNextMask & bit) != 0 {
-                    // Dynamically expand valid Wubi continuation keys by ~11% into adjacent gutters/margins
-                    effRect = effRect.insetBy(dx: -4.2, dy: -3.4)
+                    // Dynamically expand valid Wubi continuation keys into letter gutters without encroaching on Spacebar
+                    effRect = effRect.insetBy(dx: -4.8, dy: -3.4)
+                    if effRect.maxY > maxLetterBottomY {
+                        effRect.size.height = max(k.frame.height, maxLetterBottomY - effRect.minY)
+                    }
                 } else {
-                    effRect = effRect.insetBy(dx: 1.8, dy: 1.4)
+                    effRect = effRect.insetBy(dx: 4.5, dy: 3.0)
+                    deadKeyPenalty = 4.0
                 }
             }
 
@@ -499,9 +505,9 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                     qPt.y - effRect.minY,
                     effRect.maxY - qPt.y
                 )
-                score = -innerDepth
+                score = -innerDepth + deadKeyPenalty * 0.25
             } else {
-                score = hypot(dx, dy)
+                score = hypot(dx, dy) + deadKeyPenalty
             }
 
             if score < bestScore {

@@ -352,8 +352,6 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     var enableInputClicksWhenVisible: Bool { true }
 
     var onKeyTouchDown: ((IOSKeySpec) -> Void)?
-    var onLetterPress: ((IOSKeySpec, CGPoint) -> Void)?
-    var onEndLetterPreview: (() -> Void)?
     var onKeySlidePreview: ((IOSKeySpec?) -> Void)?
     var onKeyTouchUp: ((IOSKeySpec, CGPoint) -> Void)?
     var onKeyTouchCancel: (() -> Void)?
@@ -362,12 +360,14 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     var onTrackpadMove: ((Int, Int) -> Void)?
 
     private struct TrackedTouch {
+        weak var touch: UITouch?
         let beganTimestamp: TimeInterval
         let initialPoint: CGPoint
         var currentPoint: CGPoint
         let initialKey: IOSKeySpec
         var currentKey: IOSKeySpec
         let isPlaneSlide: Bool
+        var didSlideToSymbol: Bool = false
         let startedOnSpace: Bool
         var committedByRollover: Bool = false
     }
@@ -379,6 +379,14 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         didSet {
             if oldValue != coveredCalloutKeyId {
                 syncKeycapPressStates()
+            }
+        }
+    }
+
+    override var isHidden: Bool {
+        didSet {
+            if isHidden {
+                resetAllTouches()
             }
         }
     }
@@ -399,6 +407,81 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    /// Capture slightly high Row-0 (`q..p`) strikes passed through from the bottom `6pt` of `IOSCandidateRibbonView`
+    /// as well as slightly low Row-3 (`Space`/`123`/`Return`) strikes near the bottom dock edge.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        bounds.insetBy(dx: 0, dy: -8.0).contains(point)
+    }
+
+    override func willMove(toWindow newWindow: UIWindow?) {
+        super.willMove(toWindow: newWindow)
+        if newWindow == nil {
+            resetAllTouches()
+        }
+    }
+
+    func resetAllTouches() {
+        spaceHoldTimer?.invalidate()
+        spaceHoldTimer = nil
+        spaceHoldTouchId = nil
+        if trackpad.isActive {
+            trackpad.end()
+            onTrackpadStateChanged?(false)
+        }
+        trackedTouches.removeAll()
+        coveredCalloutKeyId = nil
+        syncKeycapPressStates()
+    }
+
+    /// Commits any pending touch-down key before an external control (e.g. candidate ribbon tap) runs,
+    /// guaranteeing strict causal ordering across `keyCanvas` and `ribbonView`.
+    func flushPendingTouches() {
+        purgeEndedOrOrphanTouches()
+        let pendingIds = trackedTouches
+            .filter {
+                let s = $0.value
+                return !s.committedByRollover && !s.isPlaneSlide && !(s.startedOnSpace && trackpad.isActive)
+            }
+            .sorted(by: { $0.value.beganTimestamp < $1.value.beganTimestamp })
+            .map(\.key)
+
+        for oldId in pendingIds {
+            guard var oldState = trackedTouches[oldId] else { continue }
+            if oldState.startedOnSpace && spaceHoldTouchId == oldId {
+                spaceHoldTimer?.invalidate()
+                spaceHoldTimer = nil
+                spaceHoldTouchId = nil
+            }
+            oldState.committedByRollover = true
+            trackedTouches[oldId] = oldState
+            if oldState.initialKey.kind == .backspace {
+                onKeyTouchUp?(oldState.initialKey, oldState.initialPoint)
+            } else {
+                let cleanPt = (oldState.currentKey.id == oldState.initialKey.id)
+                    ? oldState.initialPoint
+                    : oldState.currentPoint
+                onKeyTouchUp?(oldState.currentKey, cleanPt)
+            }
+        }
+        syncKeycapPressStates()
+    }
+
+    private func purgeEndedOrOrphanTouches() {
+        let stale = trackedTouches.compactMap { id, state -> ObjectIdentifier? in
+            guard let t = state.touch else { return id }
+            if t.phase == .ended || t.phase == .cancelled { return id }
+            return nil
+        }
+        for id in stale {
+            if spaceHoldTouchId == id {
+                spaceHoldTimer?.invalidate()
+                spaceHoldTimer = nil
+                spaceHoldTouchId = nil
+            }
+            trackedTouches.removeValue(forKey: id)
+        }
     }
 
     func applyTheme(dark: Bool) {
@@ -455,13 +538,14 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        purgeEndedOrOrphanTouches()
         let ordered = touches.sorted(by: { $0.timestamp < $1.timestamp })
         for touch in ordered {
-            // 1. Multi-touch Rollover: commit any earlier active non-slide touch in exact press order!
+            // 1. Unified Multi-Touch Rollover: commit every earlier uncommitted touch in exact press order
+            //    BEFORE hit-testing the new touch (so `validNextMask`, `plane`, and `shiftState` are fresh!).
             let pendingIds = trackedTouches
                 .filter {
                     let state = $0.value
-                    if case .letter = state.initialKey.kind { return false }
                     return !state.committedByRollover && !state.isPlaneSlide
                         && !(state.startedOnSpace && trackpad.isActive)
                 }
@@ -477,10 +561,14 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 }
                 oldState.committedByRollover = true
                 trackedTouches[oldId] = oldState
-                let cleanPt = (oldState.currentKey.id == oldState.initialKey.id)
-                    ? oldState.initialPoint
-                    : oldState.currentPoint
-                onKeyTouchUp?(oldState.currentKey, cleanPt)
+                if oldState.initialKey.kind == .backspace {
+                    onKeyTouchUp?(oldState.initialKey, oldState.initialPoint)
+                } else {
+                    let cleanPt = (oldState.currentKey.id == oldState.initialKey.id)
+                        ? oldState.initialPoint
+                        : oldState.currentPoint
+                    onKeyTouchUp?(oldState.currentKey, cleanPt)
+                }
             }
 
             // 2. Hit-test new touch against freshly updated snapshot & dynamic validNextMask
@@ -500,12 +588,14 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
             let isSpace = (hit.kind == .space)
 
             let state = TrackedTouch(
+                touch: touch,
                 beganTimestamp: touch.timestamp,
                 initialPoint: point,
                 currentPoint: point,
                 initialKey: hit,
                 currentKey: hit,
                 isPlaneSlide: isPlane,
+                didSlideToSymbol: false,
                 startedOnSpace: isSpace,
                 committedByRollover: false
             )
@@ -531,9 +621,6 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
 
             syncKeycapPressStates()
             onKeyTouchDown?(hit)
-            if case .letter = hit.kind {
-                onLetterPress?(hit, point)
-            }
         }
     }
 
@@ -542,15 +629,21 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         for touch in touches {
             let id = ObjectIdentifier(touch)
             guard var state = trackedTouches[id], !state.committedByRollover else { continue }
-            if case .letter = state.initialKey.kind { continue }
             if state.initialKey.kind == .backspace { continue }
             let pt = touch.location(in: self)
             state.currentPoint = pt
 
             // 1. Hold-and-slide from `123` / `#+=` to pick a number/punctuation and auto-return
             if state.isPlaneSlide {
+                if state.initialKey.frame.insetBy(dx: -8, dy: -8).contains(pt) && !state.didSlideToSymbol {
+                    trackedTouches[id] = state
+                    continue
+                }
                 if let hit = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap), hit.id != state.currentKey.id {
                     state.currentKey = hit
+                    if case .symbol = hit.kind {
+                        state.didSlideToSymbol = true
+                    }
                     trackedTouches[id] = state
                     syncKeycapPressStates()
                     onKeySlidePreview?(hit)
@@ -563,7 +656,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
             // 2. Spacebar 2D trackpad cursor drag
             if state.startedOnSpace {
                 trackedTouches[id] = state
-                if !trackpad.isActive && hypot(pt.x - state.initialPoint.x, pt.y - state.initialPoint.y) > 13 {
+                if !trackpad.isActive && hypot(pt.x - state.initialPoint.x, pt.y - state.initialPoint.y) > 14 {
                     if spaceHoldTouchId == id {
                         spaceHoldTimer?.invalidate()
                         spaceHoldTimer = nil
@@ -579,23 +672,27 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
             }
 
             // 3. Sticky Press-Lock Hysteresis: ignore natural thumb lift-roll within expanded keep-zone!
-            let keepRect = state.currentKey.frame.insetBy(dx: -9.5, dy: -12.5)
+            let keepRect = state.currentKey.frame.insetBy(dx: -10.0, dy: -13.0)
             if keepRect.contains(pt) {
                 trackedTouches[id] = state
                 continue
             }
 
-            // Only switch keys on deliberate hold-slide, never on sub-85ms rapid lift flicks!
-            let dt = touch.timestamp - state.beganTimestamp
-            let dist = hypot(pt.x - state.initialPoint.x, pt.y - state.initialPoint.y)
-            guard dt >= 0.085 || dist > 23.0 else {
+            // Never switch keys on rapid ballistic taps (< 95ms), regardless of how far the thumb
+            // flicks during lift-off toward the next key; only deliberate hold-and-slide switches keys!
+            let dt = max(0, touch.timestamp - state.beganTimestamp)
+            guard dt >= 0.095 else {
                 trackedTouches[id] = state
                 continue
             }
 
-            if pt.y < -34 {
+            if pt.y < -72 {
                 trackedTouches[id] = state
                 onKeySlidePreview?(nil)
+                continue
+            }
+            if pt.y < 0 {
+                trackedTouches[id] = state
                 continue
             }
 
@@ -624,16 +721,6 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 spaceHoldTouchId = nil
             }
 
-            if case .letter = state.initialKey.kind {
-                let newestLetterStillDown = trackedTouches.values.contains { other in
-                    guard case .letter = other.initialKey.kind else { return false }
-                    return other.beganTimestamp > state.beganTimestamp
-                }
-                syncKeycapPressStates()
-                if !newestLetterStillDown { onEndLetterPreview?() }
-                continue
-            }
-
             if state.committedByRollover {
                 syncKeycapPressStates()
                 continue
@@ -648,14 +735,16 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
 
             if state.isPlaneSlide {
                 syncKeycapPressStates()
-                guard let snap = snapshot,
+                if !state.didSlideToSymbol {
+                    // Normal tap on `123` / `ABC` / `#+=` (already switched in `onKeyTouchDown`): keep new plane!
+                    onKeySlidePreview?(nil)
+                    continue
+                }
+                guard pt.y >= -72,
+                      let snap = snapshot,
                       let hit = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap) else {
                     onRestorePlane?()
                     onKeyTouchCancel?()
-                    continue
-                }
-                if hit.id == state.initialKey.id {
-                    onKeySlidePreview?(nil)
                     continue
                 }
                 if case .symbol(let sym) = hit.kind {
@@ -663,6 +752,8 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                     if sym.allSatisfy(\.isNumber) {
                         onRestorePlane?()
                     }
+                } else if hit.id == state.initialKey.id {
+                    onKeySlidePreview?(nil)
                 } else {
                     onRestorePlane?()
                     onKeyTouchCancel?()
@@ -670,8 +761,10 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 continue
             }
 
-            // Deliberate swipe way off top edge cancels; slight flick into ribbon still commits cleanly!
-            if pt.y < -34 {
+            // Only cancel when deliberately dragged well outside the entire keyboard tray (`y < -72` after >=140ms);
+            // rapid thumb flicks into the candidate ribbon (`y = -44..0`) ALWAYS commit cleanly!
+            let dt = max(0, touch.timestamp - state.beganTimestamp)
+            if pt.y < -72 && dt >= 0.14 {
                 syncKeycapPressStates()
                 onKeyTouchCancel?()
                 continue
@@ -684,7 +777,9 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for touch in touches {
+        let ordered = touches.sorted(by: { $0.timestamp < $1.timestamp })
+        var rescuedAny = false
+        for touch in ordered {
             let id = ObjectIdentifier(touch)
             guard let state = trackedTouches.removeValue(forKey: id) else { continue }
             if spaceHoldTouchId == id {
@@ -693,15 +788,32 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 spaceHoldTouchId = nil
             }
             if state.isPlaneSlide {
-                onRestorePlane?()
+                if state.didSlideToSymbol {
+                    onRestorePlane?()
+                }
+                continue
             }
             if state.startedOnSpace && trackpad.isActive {
                 trackpad.end()
                 onTrackpadStateChanged?(false)
+                continue
+            }
+            if state.committedByRollover || state.initialKey.kind == .backspace {
+                continue
+            }
+
+            // Distinguish brief stationary edge-gated taps (`drift <= 14pt`, `dt <= 0.22s`, e.g. iOS screen-edge
+            // or bottom-dock gesture gates) from real scroll/dismiss swipes (`drift > 14pt`):
+            let pt = touch.location(in: self)
+            let drift = hypot(pt.x - state.initialPoint.x, pt.y - state.initialPoint.y)
+            let dt = max(0, touch.timestamp - state.beganTimestamp)
+            if !isHidden && drift <= 14.0 && dt <= 0.22 {
+                rescuedAny = true
+                onKeyTouchUp?(state.initialKey, state.initialPoint)
             }
         }
         syncKeycapPressStates()
-        if trackedTouches.values.allSatisfy(\.committedByRollover) {
+        if !rescuedAny && trackedTouches.values.allSatisfy(\.committedByRollover) {
             onKeyTouchCancel?()
         }
     }
@@ -792,7 +904,6 @@ final class IOSKeyCalloutView: UIView {
             max(3.5, keyFrameInSuperview.midX - headW * 0.5),
             max(3.5, superW - headW - 3.5)
         )
-        let headMaxX = headMinX + headW
         let rawFloatingY = keyFrameInSuperview.minY - hoverGap - headH
 
         let fillCol = dark

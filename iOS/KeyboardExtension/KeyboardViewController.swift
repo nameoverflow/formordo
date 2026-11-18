@@ -48,12 +48,12 @@ public final class KeyboardViewController: UIInputViewController {
     public override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         stopBackspaceRepeat()
+        keyCanvas.resetAllTouches()
         calloutView.hideImmediately()
-        keyCanvas.coveredCalloutKeyId = nil
         saveUserDataTimer?.invalidate()
         cancelMarkedCode()
         bridge.clearComposition()
-        bridge.flushUserDataIfNeeded()
+        bridge.flushUserDataIfNeeded(refreshPublishedLists: false)
         feedback.suspend()
     }
 
@@ -187,14 +187,6 @@ public final class KeyboardViewController: UIInputViewController {
             }
         }
 
-        keyCanvas.onLetterPress = { [weak self] spec, point in
-            self?.handleKeyRelease(spec: spec, pointInCanvas: point)
-        }
-        keyCanvas.onEndLetterPreview = { [weak self] in
-            self?.keyCanvas.coveredCalloutKeyId = nil
-            self?.calloutView.releasePreview()
-        }
-
         keyCanvas.onKeySlidePreview = { [weak self] spec in
             guard let self else { return }
             if let spec {
@@ -258,6 +250,7 @@ public final class KeyboardViewController: UIInputViewController {
 
         ribbonView.onSelectCandidate = { [weak self] relIdx in
             guard let self else { return }
+            self.keyCanvas.flushPendingTouches()
             self.feedback.fireSoftStep(playClick: true)
             let out = self.bridge.selectCandidate(pageRelIndex: relIdx, timestampMs: Self.nowMs())
             self.applyEngineState(out)
@@ -265,12 +258,14 @@ public final class KeyboardViewController: UIInputViewController {
 
         ribbonView.onSelectStarterWord = { [weak self] word in
             guard let self else { return }
+            self.keyCanvas.flushPendingTouches()
             self.feedback.fireSoftStep(playClick: true)
             self.textDocumentProxy.insertText(word)
         }
 
         ribbonView.onTapChevron = { [weak self] in
             guard let self else { return }
+            self.keyCanvas.flushPendingTouches()
             self.feedback.fireSoftStep(playClick: true)
             guard !self.bridge.state.preedit.isEmpty else { return }
             self.expandedGrid.isHidden.toggle()
@@ -513,8 +508,8 @@ public final class KeyboardViewController: UIInputViewController {
             textDocumentProxy.insertText(out.commitText)
             markedCode = ""
             saveUserDataTimer?.invalidate()
-            saveUserDataTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated { self?.bridge.flushUserDataIfNeeded() }
+            saveUserDataTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.bridge.flushUserDataIfNeeded(refreshPublishedLists: false) }
             }
         }
         if out.preedit.isEmpty {

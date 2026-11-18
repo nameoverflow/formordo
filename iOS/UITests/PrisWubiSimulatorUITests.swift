@@ -18,11 +18,8 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         canvas.updateSnapshot(snapshot)
 
         var committed = ""
-        canvas.onLetterPress = { spec, _ in
-            committed += spec.primaryLabel
-        }
         canvas.onKeyTouchUp = { spec, _ in
-            XCTFail("Letter \(spec.primaryLabel) was delivered again on lift")
+            committed += spec.primaryLabel
         }
 
         // 1. Overlapping two-thumb rollover (32 consecutive overlapping taps where finger N+1
@@ -58,9 +55,10 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         }
         XCTAssertEqual(committed, sequence, "Zero dropped or reordered keys under overlapping rollover + ribbon lift")
 
-        // 2. Rapid sub-85ms lift-roll across neighbor border (`t` -> rolled 8pt right onto `y` edge on release)
+        // 2. Rapid sub-90ms lift-roll across neighbor border (`t` -> rolled 8pt right onto `y` edge on release)
         committed = ""
         let tKey = snapshot.keys.first { $0.primaryLabel == "t" }!
+        let yKey = snapshot.keys.first { $0.primaryLabel == "y" }!
         let flick = SyntheticFingerTouch()
         flick.mockPoint = CGPoint(x: tKey.frame.midX, y: tKey.frame.midY)
         flick.mockTimestamp = 200.0
@@ -71,31 +69,62 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         flick.mockTimestamp = 200.045
         canvas.touchesMoved([flick], with: nil)
         canvas.touchesEnded([flick], with: nil)
-        XCTAssertEqual(committed, "t", "Sub-85ms thumb lift-roll must stay locked on initial key 't'")
+        XCTAssertEqual(committed, "t", "Sub-90ms thumb lift-roll must stay locked on initial key 't'")
 
-        // UIKit can cancel a finger before lift when a system gesture wins.
+        // 3. Deliberate hold-and-slide (>= 90ms) onto neighbor `y` switches cleanly to `y`!
         committed = ""
         flick.mockPoint = CGPoint(x: tKey.frame.midX, y: tKey.frame.midY)
+        flick.mockTimestamp = 205.0
         canvas.touchesBegan([flick], with: nil)
-        XCTAssertEqual(committed, "t", "The letter must reach the engine on contact")
-        canvas.touchesCancelled([flick], with: nil)
-        XCTAssertEqual(committed, "t", "Cancellation must not drop or duplicate a registered letter")
+        flick.mockPoint = CGPoint(x: yKey.frame.midX, y: yKey.frame.midY)
+        flick.mockTimestamp = 205.16
+        canvas.touchesMoved([flick], with: nil)
+        canvas.touchesEnded([flick], with: nil)
+        XCTAssertEqual(committed, "y", "Deliberate hold-and-slide must switch to neighbor key 'y'")
 
+        // 4. Stationary edge-gate cancellation (`drift <= 14pt`, `dt <= 0.22s`) rescues tap without dropping key,
+        //    whereas scroll/dismiss swipe cancellation (`drift > 14pt`) emits zero stray letters!
+        committed = ""
+        flick.mockPoint = CGPoint(x: tKey.frame.midX, y: tKey.frame.midY)
+        flick.mockTimestamp = 210.0
+        canvas.touchesBegan([flick], with: nil)
+        flick.mockTimestamp = 210.06
+        canvas.touchesCancelled([flick], with: nil)
+        XCTAssertEqual(committed, "t", "Brief stationary edge-gated cancellation must rescue tap")
+
+        committed = ""
+        flick.mockPoint = CGPoint(x: tKey.frame.midX, y: tKey.frame.midY)
+        flick.mockTimestamp = 211.0
+        canvas.touchesBegan([flick], with: nil)
+        flick.mockPoint = CGPoint(x: tKey.frame.midX, y: tKey.frame.midY + 28.0)
+        flick.mockTimestamp = 211.09
+        canvas.touchesMoved([flick], with: nil)
+        canvas.touchesCancelled([flick], with: nil)
+        XCTAssertEqual(committed, "", "Interactive scroll/dismiss swipe cancellation must not emit stray letters")
+
+        // 5. Overlapping Backspace rollover ends delete repeat without entering a stray letter
         var releasedKeys: [IOSKeyKind] = []
-        canvas.onKeyTouchUp = { spec, _ in releasedKeys.append(spec.kind) }
+        canvas.onKeyTouchUp = { spec, _ in
+            releasedKeys.append(spec.kind)
+            if case .letter = spec.kind {
+                committed += spec.primaryLabel
+            }
+        }
         let backspaceKey = snapshot.keys.first { $0.kind == .backspace }!
         let deleteTouch = SyntheticFingerTouch()
         deleteTouch.mockPoint = CGPoint(x: backspaceKey.frame.midX, y: backspaceKey.frame.midY)
-        deleteTouch.mockTimestamp = 201
+        deleteTouch.mockTimestamp = 212.0
         canvas.touchesBegan([deleteTouch], with: nil)
-        deleteTouch.mockPoint = flick.mockPoint
-        deleteTouch.mockTimestamp = 201.1
+        deleteTouch.mockPoint = CGPoint(x: tKey.frame.midX, y: tKey.frame.midY)
+        deleteTouch.mockTimestamp = 212.1
         canvas.touchesMoved([deleteTouch], with: nil)
-        flick.mockTimestamp = 201.2
+        flick.mockPoint = CGPoint(x: tKey.frame.midX, y: tKey.frame.midY)
+        flick.mockTimestamp = 212.2
         canvas.touchesBegan([flick], with: nil)
+        flick.mockTimestamp = 212.25
         canvas.touchesEnded([deleteTouch, flick], with: nil)
-        XCTAssertEqual(releasedKeys, [.backspace], "Rollover must end delete repeat without entering a stray letter")
-        XCTAssertEqual(committed, "tt")
+        XCTAssertEqual(releasedKeys, [.backspace, .letter(UInt8(ascii: "t"))])
+        XCTAssertEqual(committed, "t")
     }
 
     @MainActor

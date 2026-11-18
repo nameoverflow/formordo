@@ -1,17 +1,13 @@
 #if os(iOS)
 import UIKit
 
-/// Reusable candidate button with subtle native rounded-pill highlight on touch-down.
+/// Direct `UIControl` + `UILabel` candidate slot (zero `UIButton.Configuration` deferred layout pass).
 @MainActor
-private final class IOSRibbonSlotButton: UIButton {
+private final class IOSRibbonSlotControl: UIControl {
     var slotIndex: Int = 0
     var starterWord: String?
-    private(set) var titleWidth: CGFloat = 0
-
-    func setRibbonTitle(_ title: NSAttributedString) {
-        configuration?.attributedTitle = AttributedString(title)
-        titleWidth = ceil(title.size().width) + 12
-    }
+    private(set) var slotWidth: CGFloat = 0
+    private let label = UILabel()
 
     override var isHighlighted: Bool {
         didSet {
@@ -23,35 +19,56 @@ private final class IOSRibbonSlotButton: UIButton {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        layer.cornerRadius = 7.0
+        isOpaque = false
+        backgroundColor = .clear
+        layer.cornerRadius = 8.0
         layer.cornerCurve = .continuous
-        var cfg = UIButton.Configuration.plain()
-        cfg.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 6, bottom: 5, trailing: 6)
-        cfg.background.backgroundColor = .clear
-        self.configuration = cfg
+
+        label.numberOfLines = 1
+        label.textAlignment = .center
+        label.lineBreakMode = .byClipping
+        label.isUserInteractionEnabled = false
+        addSubview(label)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
+
+    func setRibbonTitle(_ title: NSAttributedString) {
+        label.attributedText = title
+        slotWidth = ceil(title.size().width) + 16.0
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        label.frame = bounds
+    }
 }
 
-/// iOS 26 Native Airy Unboxed Candidate Bar (`44pt` height) with zero-allocation slot pooling:
-/// - Zero view destruction/recreation during 120Hz typing bursts
-/// - Clean `18pt` SF/PingFang text with tactile press highlight
-final class IOSCandidateRibbonView: UIView {
+/// iOS 26 Native Airy Unboxed Candidate Bar (`44pt` height):
+/// - Pure `UIView` horizontal track (`clipContainer` + `contentTrack` + horizontal `UIPanGestureRecognizer`)
+///   with ZERO `UIScrollView`, completely eliminating iOS 26's `_UIScrollPocket` / `UIScrollEdgeEffect`
+///   variable blur across the 44pt bar on physical devices and removing `UIScrollView` touch delay.
+/// - Passes touches in the bottom `6pt` empty strip (`y = 38..44`) directly through to Row 0 (`q..p`).
+final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     var onSelectCandidate: ((Int) -> Void)?
     var onSelectStarterWord: ((String) -> Void)?
     var onTapChevron: (() -> Void)?
 
-    private let scrollView = UIScrollView()
-    private let scrollMaskContainer = UIView()
+    private let clipContainer = UIView()
+    private let contentTrack = UIView()
     private let edgeFadeMask = CAGradientLayer()
     private let divider = UIView()
     private let chevronBtn = UIButton(type: .system)
-    private var slotButtons: [IOSRibbonSlotButton] = []
-    private var scrollTrailingToDivider: NSLayoutConstraint!
-    private var scrollTrailingToFull: NSLayoutConstraint!
+    private var slotControls: [IOSRibbonSlotControl] = []
+
+    private var clipTrailingToDivider: NSLayoutConstraint!
+    private var clipTrailingToFull: NSLayoutConstraint!
+
+    private var contentWidth: CGFloat = 0
+    private var scrollOffsetX: CGFloat = 0
+    private var panStartOffsetX: CGFloat = 0
 
     private static let starterWords = ["我", "我们", "不是", "怎么", "你", "在", "这", "可以"]
 
@@ -64,24 +81,37 @@ final class IOSCandidateRibbonView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private func setupViews() {
-        scrollMaskContainer.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.showsHorizontalScrollIndicator = false
-        scrollView.delaysContentTouches = false
-        scrollView.canCancelContentTouches = true
+    /// Pass touches in the bottom `6pt` empty margin (`y = 38..44`, below candidate glyphs) straight
+    /// through to Row 0 (`q..p`) so slightly high thumb strikes on top-row Wubi keys never get swallowed.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        guard bounds.contains(point) else { return false }
+        if !chevronBtn.isHidden && point.x >= divider.frame.minX - 4.0 {
+            return true
+        }
+        return point.y <= bounds.height - 6.0
+    }
 
-        scrollMaskContainer.addSubview(scrollView)
+    private func setupViews() {
+        clipContainer.translatesAutoresizingMaskIntoConstraints = false
+        clipContainer.clipsToBounds = true
+        clipContainer.backgroundColor = .clear
+
+        contentTrack.backgroundColor = .clear
+        clipContainer.addSubview(contentTrack)
 
         edgeFadeMask.colors = [
             UIColor.black.cgColor,
             UIColor.black.cgColor,
             UIColor.clear.cgColor,
         ]
-        edgeFadeMask.locations = [0.0, 0.92, 1.0]
+        edgeFadeMask.locations = [0.0, 0.91, 1.0]
         edgeFadeMask.startPoint = CGPoint(x: 0.0, y: 0.5)
         edgeFadeMask.endPoint = CGPoint(x: 1.0, y: 0.5)
-        scrollMaskContainer.layer.mask = edgeFadeMask
+
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleHorizontalPan(_:)))
+        pan.delegate = self
+        pan.cancelsTouchesInView = true
+        clipContainer.addGestureRecognizer(pan)
 
         divider.translatesAutoresizingMaskIntoConstraints = false
         chevronBtn.translatesAutoresizingMaskIntoConstraints = false
@@ -89,23 +119,18 @@ final class IOSCandidateRibbonView: UIView {
         chevronBtn.setImage(UIImage(systemName: "chevron.down", withConfiguration: cfg), for: .normal)
         chevronBtn.addTarget(self, action: #selector(handleChevron), for: .touchUpInside)
 
-        addSubview(scrollMaskContainer)
+        addSubview(clipContainer)
         addSubview(divider)
         addSubview(chevronBtn)
 
-        scrollTrailingToDivider = scrollMaskContainer.trailingAnchor.constraint(equalTo: divider.leadingAnchor)
-        scrollTrailingToFull = scrollMaskContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8)
+        clipTrailingToDivider = clipContainer.trailingAnchor.constraint(equalTo: divider.leadingAnchor)
+        clipTrailingToFull = clipContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6)
 
         NSLayoutConstraint.activate([
-            scrollMaskContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scrollTrailingToFull,
-            scrollMaskContainer.topAnchor.constraint(equalTo: topAnchor),
-            scrollMaskContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            scrollView.leadingAnchor.constraint(equalTo: scrollMaskContainer.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: scrollMaskContainer.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: scrollMaskContainer.topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: scrollMaskContainer.bottomAnchor),
+            clipContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            clipTrailingToFull,
+            clipContainer.topAnchor.constraint(equalTo: topAnchor),
+            clipContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             divider.trailingAnchor.constraint(equalTo: chevronBtn.leadingAnchor),
             divider.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
@@ -121,31 +146,121 @@ final class IOSCandidateRibbonView: UIView {
         ensureSlotCapacity(10)
     }
 
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+        guard contentWidth > clipContainer.bounds.width + 2.0 else { return false }
+        let vel = pan.velocity(in: clipContainer)
+        return abs(vel.x) > abs(vel.y)
+    }
+
+    @objc private func handleHorizontalPan(_ pan: UIPanGestureRecognizer) {
+        let maxOffset = max(0, contentWidth - clipContainer.bounds.width)
+        guard maxOffset > 0 else { return }
+
+        switch pan.state {
+        case .began:
+            contentTrack.layer.removeAllAnimations()
+            panStartOffsetX = scrollOffsetX
+        case .changed:
+            let dx = pan.translation(in: clipContainer).x
+            let raw = panStartOffsetX - dx
+            if raw < 0 {
+                scrollOffsetX = raw * 0.25
+            } else if raw > maxOffset {
+                scrollOffsetX = maxOffset + (raw - maxOffset) * 0.25
+            } else {
+                scrollOffsetX = raw
+            }
+            applyScrollOffset()
+        case .ended, .cancelled:
+            let vx = pan.velocity(in: clipContainer).x
+            let projected = min(max(0, scrollOffsetX - vx * 0.16), maxOffset)
+            UIView.animate(
+                withDuration: 0.24,
+                delay: 0,
+                options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState],
+                animations: {
+                    self.scrollOffsetX = projected
+                    self.applyScrollOffset()
+                }
+            )
+        default:
+            break
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
-        var x: CGFloat = 12
-        for button in slotButtons where !button.isHidden {
-            button.frame = CGRect(x: x, y: 1, width: button.titleWidth, height: scrollView.bounds.height)
-            x = button.frame.maxX + 12
+        let barH = clipContainer.bounds.height
+        let slotH = max(28.0, barH - 9.0)
+        let slotY = floor((barH - slotH) * 0.5) + 0.5
+
+        // Adaptive spacing when idle starter words slightly exceed narrower screens (e.g. 393/402pt)
+        let visibleSlots = slotControls.filter { !$0.isHidden }
+        let totalSlotWidths = visibleSlots.reduce(CGFloat(0)) { $0 + $1.slotWidth }
+        let availW = clipContainer.bounds.width
+        let spacing: CGFloat
+        if lastPreeditEmpty == true, visibleSlots.count > 1, availW > 200 {
+            let naturalSpan = 10.0 + totalSlotWidths + CGFloat(visibleSlots.count - 1) * 8.0 + 10.0
+            if naturalSpan <= availW {
+                spacing = min(14.0, floor((availW - 20.0 - totalSlotWidths) / CGFloat(visibleSlots.count - 1)))
+            } else {
+                spacing = 6.0
+            }
+        } else {
+            spacing = 8.0
         }
-        scrollView.contentSize = CGSize(width: x + 4, height: scrollView.bounds.height)
+
+        var x: CGFloat = 10.0
+        for slot in visibleSlots {
+            slot.frame = CGRect(x: x, y: slotY, width: slot.slotWidth, height: slotH)
+            x = slot.frame.maxX + spacing
+        }
+        contentWidth = max(0, x - spacing + 10.0)
+
+        let maxOffset = max(0, contentWidth - availW)
+        if scrollOffsetX > maxOffset {
+            scrollOffsetX = maxOffset
+        }
+        applyScrollOffset()
+    }
+
+    private func applyScrollOffset() {
+        let barH = clipContainer.bounds.height
+        let availW = clipContainer.bounds.width
+        contentTrack.frame = CGRect(
+            x: -scrollOffsetX,
+            y: 0,
+            width: max(availW, contentWidth),
+            height: barH
+        )
+        // Only attach an alpha-fade mask when right-side content actually overflows:
+        // avoids unnecessary Core Animation offscreen group rendering on normal/idle frames!
+        let hasRightOverflow = (contentWidth - scrollOffsetX) > availW + 2.0
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        edgeFadeMask.frame = scrollMaskContainer.bounds
+        if hasRightOverflow {
+            edgeFadeMask.frame = clipContainer.bounds
+            if clipContainer.layer.mask !== edgeFadeMask {
+                clipContainer.layer.mask = edgeFadeMask
+            }
+        } else if clipContainer.layer.mask != nil {
+            clipContainer.layer.mask = nil
+        }
         CATransaction.commit()
     }
 
     private func ensureSlotCapacity(_ count: Int) {
-        while slotButtons.count < count {
-            let btn = IOSRibbonSlotButton(type: .custom)
-            btn.addTarget(self, action: #selector(handleSlotTap(_:)), for: .touchUpInside)
-            btn.isHidden = true
-            scrollView.addSubview(btn)
-            slotButtons.append(btn)
+        while slotControls.count < count {
+            let ctrl = IOSRibbonSlotControl(frame: .zero)
+            ctrl.addTarget(self, action: #selector(handleSlotTap(_:)), for: .touchUpInside)
+            ctrl.isHidden = true
+            contentTrack.addSubview(ctrl)
+            slotControls.append(ctrl)
         }
     }
 
-    @objc private func handleSlotTap(_ sender: IOSRibbonSlotButton) {
+    @objc private func handleSlotTap(_ sender: IOSRibbonSlotControl) {
         if let starter = sender.starterWord {
             onSelectStarterWord?(starter)
         } else {
@@ -182,17 +297,17 @@ final class IOSCandidateRibbonView: UIView {
         chevronBtn.tintColor = textCol
         chevronBtn.isHidden = isEmpty
         divider.isHidden = isEmpty
-        scrollTrailingToDivider.isActive = !isEmpty
-        scrollTrailingToFull.isActive = isEmpty
+        clipTrailingToDivider.isActive = !isEmpty
+        clipTrailingToFull.isActive = isEmpty
 
         UIView.performWithoutAnimation {
             if isEmpty {
                 let words = Self.starterWords
                 ensureSlotCapacity(words.count)
-                for (i, btn) in slotButtons.enumerated() {
+                for (i, ctrl) in slotControls.enumerated() {
                     if i < words.count {
-                        btn.slotIndex = i
-                        btn.starterWord = words[i]
+                        ctrl.slotIndex = i
+                        ctrl.starterWord = words[i]
                         let attr = NSAttributedString(
                             string: words[i],
                             attributes: [
@@ -200,20 +315,20 @@ final class IOSCandidateRibbonView: UIView {
                                 .foregroundColor: textCol,
                             ]
                         )
-                        btn.setRibbonTitle(attr)
-                        btn.isHidden = false
+                        ctrl.setRibbonTitle(attr)
+                        ctrl.isHidden = false
                     } else {
-                        btn.isHidden = true
+                        ctrl.isHidden = true
                     }
                 }
             } else {
                 let items = state.candidates
                 ensureSlotCapacity(items.count)
-                for (i, btn) in slotButtons.enumerated() {
+                for (i, ctrl) in slotControls.enumerated() {
                     if i < items.count {
                         let item = items[i]
-                        btn.slotIndex = i
-                        btn.starterWord = nil
+                        ctrl.slotIndex = i
+                        ctrl.starterWord = nil
                         let attr = NSMutableAttributedString(
                             string: item.text,
                             attributes: [
@@ -235,15 +350,16 @@ final class IOSCandidateRibbonView: UIView {
                                 )
                             )
                         }
-                        btn.setRibbonTitle(attr)
-                        btn.isHidden = false
+                        ctrl.setRibbonTitle(attr)
+                        ctrl.isHidden = false
                     } else {
-                        btn.isHidden = true
+                        ctrl.isHidden = true
                     }
                 }
             }
-            scrollView.setContentOffset(.zero, animated: false)
+            scrollOffsetX = 0
             setNeedsLayout()
+            layoutIfNeeded()
         }
     }
 
@@ -266,6 +382,14 @@ final class IOSExpandedCandidateView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.contentInsetAdjustmentBehavior = .never
+        if #available(iOS 26.0, *) {
+            scrollView.topEdgeEffect.isHidden = true
+            scrollView.bottomEdgeEffect.isHidden = true
+            scrollView.leftEdgeEffect.isHidden = true
+            scrollView.rightEdgeEffect.isHidden = true
+        }
+
         gridStack.translatesAutoresizingMaskIntoConstraints = false
         gridStack.axis = .vertical
         gridStack.spacing = 8
