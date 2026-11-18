@@ -64,6 +64,7 @@ public final class PrisWubiInputController: IMKInputController {
             WubiBridge.shared.clearComposition()
         }
         CandidatePanelController.shared.hide()
+        ModeIndicatorPanelController.shared.hide()
     }
 
     public override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
@@ -82,6 +83,14 @@ public final class PrisWubiInputController: IMKInputController {
                 if event.timestamp - shiftDownTimestamp < 0.35 {
                     let out = WubiBridge.shared.toggleAsciiMode()
                     applyEngineOutput(out, client: clientObj)
+                    if out.preedit.isEmpty {
+                        let caret = queryCaretRect(client: clientObj)
+                        ModeIndicatorPanelController.shared.show(
+                            asciiMode: out.asciiMode,
+                            caretRect: caret,
+                            clientWindowLevel: clientObj?.windowLevel()
+                        )
+                    }
                     return true
                 }
             } else {
@@ -154,6 +163,7 @@ public final class PrisWubiInputController: IMKInputController {
                 replacementRange: NSRange(location: NSNotFound, length: NSNotFound)
             )
             let caret = queryCaretRect(client: client)
+            ModeIndicatorPanelController.shared.hide()
             CandidatePanelController.shared.update(
                 state: out,
                 caretRect: caret,
@@ -170,6 +180,15 @@ public final class PrisWubiInputController: IMKInputController {
                 let marked = client.markedRange()
                 if marked.location != NSNotFound {
                     let rect = client.firstRect(forCharacterRange: marked, actualRange: nil)
+                    if rect.origin != .zero {
+                        lineRect = rect
+                    }
+                }
+            }
+            if lineRect.origin == .zero {
+                let sel = client.selectedRange()
+                if sel.location != NSNotFound {
+                    let rect = client.firstRect(forCharacterRange: NSRange(location: sel.location, length: 0), actualRange: nil)
                     if rect.origin != .zero {
                         lineRect = rect
                     }
@@ -227,10 +246,9 @@ public final class PrisWubiInputController: IMKInputController {
 
         let prefsItem = NSMenuItem(
             title: "棱五笔偏好设置…",
-            action: #selector(openPreferencesWindow(_:)),
-            keyEquivalent: ","
+            action: #selector(showPreferences(_:)),
+            keyEquivalent: ""
         )
-        prefsItem.target = self
         m.addItem(prefsItem)
 
         return m
@@ -260,7 +278,7 @@ public final class PrisWubiInputController: IMKInputController {
         WubiBridge.shared.applyAndSavePreferences(p)
     }
 
-    @objc private func openPreferencesWindow(_ sender: Any?) {
+    public override func showPreferences(_ sender: Any!) {
         SettingsWindowController.shared.show()
     }
 

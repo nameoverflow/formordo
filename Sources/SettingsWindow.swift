@@ -824,25 +824,30 @@ public final class SettingsWindowController {
     private init() {}
 
     public func show(section: SettingsSection = .schema) {
-        if let win = window {
-            win.contentView = NSHostingView(rootView: SettingsRootView(bridge: .shared, initialSection: section))
+        if window == nil {
+            let win = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 720, height: 580),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            win.title = "棱五笔偏好设置"
+            win.toolbarStyle = .unified
+            win.center()
+            win.isReleasedWhenClosed = false
+            self.window = win
+        }
+        guard let win = window else { return }
+        win.contentView = NSHostingView(rootView: SettingsRootView(bridge: .shared, initialSection: section))
+        let bringToFront: @MainActor () -> Void = {
             NSApp.activate(ignoringOtherApps: true)
             win.makeKeyAndOrderFront(nil)
-            return
+            win.orderFrontRegardless()
         }
-        let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 580),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false
-        )
-        win.title = "棱五笔偏好设置"
-        win.toolbarStyle = .unified
-        win.center()
-        win.isReleasedWhenClosed = false
-        win.contentView = NSHostingView(rootView: SettingsRootView(bridge: .shared, initialSection: section))
-        self.window = win
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
+        bringToFront()
+        // Re-assert activation on the next runloop tick so closing the status-bar menu doesn't steal focus back.
+        DispatchQueue.main.async {
+            bringToFront()
+        }
     }
 }

@@ -646,3 +646,153 @@ public final class CandidatePanelController {
         NSAnimationContext.endGrouping()
     }
 }
+
+private final class ModeIndicatorContentView: NSView {
+    var label: String = "中" {
+        didSet {
+            if label != oldValue {
+                needsDisplay = true
+            }
+        }
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let font = NSFont(name: "PingFangSC-Medium", size: 14.0)
+            ?? NSFont.systemFont(ofSize: 14.0, weight: .medium)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.labelColor,
+        ]
+        let attr = NSAttributedString(string: label, attributes: attrs)
+        let textSize = attr.size()
+        let origin = NSPoint(
+            x: round((bounds.width - textSize.width) * 0.5),
+            y: round((bounds.height - textSize.height) * 0.5)
+        )
+        attr.draw(at: origin)
+
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let borderColor = isDark
+            ? NSColor.white.withAlphaComponent(0.16)
+            : NSColor.black.withAlphaComponent(0.11)
+        let borderPath = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.25, dy: 0.25), xRadius: 7.0, yRadius: 7.0)
+        borderPath.lineWidth = 0.5
+        borderColor.setStroke()
+        borderPath.stroke()
+    }
+}
+
+@MainActor
+public final class ModeIndicatorPanelController {
+    public static let shared = ModeIndicatorPanelController()
+
+    private let panel: NSPanel
+    private let contentView: ModeIndicatorContentView
+    private var hideWorkItem: DispatchWorkItem?
+    private let panelSize = NSSize(width: 32, height: 28)
+
+    private init() {
+        let frame = NSRect(origin: .zero, size: panelSize)
+        let effect = NSVisualEffectView(frame: frame)
+        effect.material = .popover
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = 7.0
+        effect.layer?.cornerCurve = .continuous
+        effect.layer?.masksToBounds = true
+
+        let content = ModeIndicatorContentView(frame: frame)
+        content.autoresizingMask = [.width, .height]
+        effect.addSubview(content)
+
+        let p = NSPanel(
+            contentRect: frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        p.animationBehavior = .none
+        p.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.floatingWindow)) + 2)
+        p.isOpaque = false
+        p.backgroundColor = .clear
+        p.hasShadow = true
+        p.isMovable = false
+        p.ignoresMouseEvents = true
+        p.hidesOnDeactivate = false
+        p.worksWhenModal = true
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        p.contentView = effect
+
+        self.contentView = content
+        self.panel = p
+    }
+
+    public func show(asciiMode: Bool, caretRect: NSRect, clientWindowLevel: CGWindowLevel? = nil) {
+        hideWorkItem?.cancel()
+
+        let targetScreen = NSScreen.screens.first(where: { $0.frame.intersects(caretRect) })
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        let visible = targetScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+
+        var originX = round(caretRect.minX)
+        var originY = round(caretRect.minY - panelSize.height - 6.0)
+
+        if originY < visible.minY + 6.0 {
+            originY = round(caretRect.maxY + 6.0)
+        }
+        if originX + panelSize.width > visible.maxX - 8.0 {
+            originX = max(visible.minX + 8.0, round(visible.maxX - panelSize.width - 8.0))
+        }
+        if originX < visible.minX + 8.0 {
+            originX = round(visible.minX + 8.0)
+        }
+
+        let baseLevel = Int(CGWindowLevelForKey(.floatingWindow)) + 2
+        let targetLevel = clientWindowLevel.map { max(baseLevel, Int($0) + 1) } ?? baseLevel
+        if panel.level.rawValue != targetLevel {
+            panel.level = NSWindow.Level(rawValue: targetLevel)
+        }
+
+        contentView.label = asciiMode ? "英" : "中"
+        let targetFrame = NSRect(origin: NSPoint(x: originX, y: originY), size: panelSize)
+
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        panel.setFrame(targetFrame, display: false, animate: false)
+        contentView.displayIfNeeded()
+        panel.invalidateShadow()
+
+        if !panel.isVisible {
+            panel.orderFrontRegardless()
+        }
+
+        CATransaction.commit()
+        NSAnimationContext.endGrouping()
+
+        let item = DispatchWorkItem { [weak self] in
+            self?.hide()
+        }
+        hideWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: item)
+    }
+
+    public func hide() {
+        hideWorkItem?.cancel()
+        hideWorkItem = nil
+        guard panel.isVisible else { return }
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        panel.orderOut(nil)
+        CATransaction.commit()
+        NSAnimationContext.endGrouping()
+    }
+}
