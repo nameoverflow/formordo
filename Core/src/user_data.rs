@@ -125,6 +125,27 @@ impl UserStore {
         }
     }
 
+    pub fn valid_next_letters_mask(&self, prefix_bytes: &[u8]) -> u32 {
+        if prefix_bytes.is_empty() || prefix_bytes.len() >= 4 || self.code_index.is_empty() {
+            return 0;
+        }
+        let Some(pref) = PackedCode::from_bytes(prefix_bytes) else {
+            return 0;
+        };
+        let (lo, hi) = pref.prefix_range();
+        let pos = prefix_bytes.len();
+        let mut mask = 0u32;
+        for &code in self.code_index.keys() {
+            if code >= lo && code <= hi {
+                let d = code.digits()[pos];
+                if (1..=26).contains(&d) {
+                    mask |= 1u32 << (d - 1);
+                }
+            }
+        }
+        mask
+    }
+
     pub fn lookup_exact(&self, code: PackedCode) -> Vec<(&str, u32, u64)> {
         let Some(list) = self.code_index.get(&code) else {
             return Vec::new();

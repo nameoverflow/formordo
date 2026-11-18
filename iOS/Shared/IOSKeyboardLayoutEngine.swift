@@ -62,6 +62,8 @@ public struct IOSKeySpec: Identifiable, Equatable {
     public let kind: IOSKeyKind
     public let frame: CGRect
     public let primaryLabel: String
+    /// Secondary muted inline suffix (e.g. `"/英"` or `"/中"` on the mode switch key).
+    public let secondaryInlineLabel: String?
     /// Corner subscript label (e.g. `"五"` in bottom-right of iOS 26 native Wubi spacebar).
     public let cornerSubscript: String?
     public let systemSymbol: String?
@@ -72,6 +74,7 @@ public struct IOSKeySpec: Identifiable, Equatable {
         kind: IOSKeyKind,
         frame: CGRect,
         primaryLabel: String,
+        secondaryInlineLabel: String? = nil,
         cornerSubscript: String? = nil,
         systemSymbol: String? = nil,
         isBlueAccent: Bool = false
@@ -80,6 +83,7 @@ public struct IOSKeySpec: Identifiable, Equatable {
         self.kind = kind
         self.frame = frame
         self.primaryLabel = primaryLabel
+        self.secondaryInlineLabel = secondaryInlineLabel
         self.cornerSubscript = cornerSubscript
         self.systemSymbol = systemSymbol
         self.isBlueAccent = isBlueAccent
@@ -89,15 +93,13 @@ public struct IOSKeySpec: Identifiable, Equatable {
 /// Exact iOS 26 native Wubi keyboard geometric & state engine, calibrated 1:1 from iOS 26 metrics:
 /// - Uniform pure-white rounded-squircle keycaps (`cornerRadius = 8.5pt`, continuous) in Light mode
 /// - Lowercase key legends (`q w e r t y...`) by default, uppercase only when Shift/CapsLock active
-/// - Exact Apple column-grid invariants:
-///   * `z..m` aligns 1:1 with `s..k` (`col 1..7` of Row 1)
-///   * Bottom row `[123]` + `[中/英]` right edge == `s.maxX`
-///   * `Space.minX == d.minX`, `Space.maxX == j.maxX`, `Space` carries only subtle bottom-right `"五"`
-///   * `Return.minX == k.minX`, `Return.maxX == p.maxX`, displays `return.left` symbol when normal
+/// - Ergonomic thumb downward bias (`2.6pt`) + Wubi dictionary valid-next-key dynamic hitbox expansion
 public struct IOSKeyboardLayoutEngine: Equatable {
     public static let keyCornerRadius: CGFloat = 8.5
     public static let trayTopCornerRadius: CGFloat = 26.0
     public static let candidateBarHeight: CGFloat = 44.0
+    /// Thumbs naturally strike ~2.6pt below visual keycap center on handheld phones.
+    public static let ergonomicThumbYBias: CGFloat = 2.6
 
     public var plane: IOSKeyPlane = .letters
     public var shiftState: IOSShiftState = .lower
@@ -108,6 +110,8 @@ public struct IOSKeyboardLayoutEngine: Equatable {
     public var returnRole: IOSReturnKeyRole = .normal
     public var isComposing: Bool = false
     public var isTrackpadActive: Bool = false
+    /// 26-bit mask of valid next Wubi letters (`0x03FF_FFFF` when unconstrained).
+    public var validNextMask: UInt32 = 0x03FF_FFFF
 
     private var lastShiftTapTime: TimeInterval = 0
 
@@ -163,6 +167,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
         public let originY: Float
         public let pitchX: Float
         public let pitchY: Float
+        public let bottomRowMinY: CGFloat
     }
 
     public func computeLayout(in size: CGSize) -> LayoutSnapshot {
@@ -239,7 +244,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                     kind: .shift,
                     frame: CGRect(x: outerX, y: rowY[2], width: sideKeyW, height: keyH),
                     primaryLabel: "",
-                    systemSymbol: shiftSym
+                    systemSymbol: isTrackpadActive ? nil : shiftSym
                 )
             )
 
@@ -260,7 +265,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                     kind: .backspace,
                     frame: CGRect(x: w - outerX - sideKeyW, y: rowY[2], width: sideKeyW, height: keyH),
                     primaryLabel: "",
-                    systemSymbol: "delete.backward"
+                    systemSymbol: isTrackpadActive ? nil : "delete.backward"
                 )
             )
 
@@ -279,7 +284,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                     id: "P_symbols",
                     kind: .planeSwitch(.symbols, label: "#+="),
                     frame: CGRect(x: outerX, y: rowY[2], width: sideKeyW, height: keyH),
-                    primaryLabel: "#+="
+                    primaryLabel: isTrackpadActive ? "" : "#+="
                 )
             )
             let puncMid = asciiMode
@@ -300,7 +305,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                     kind: .backspace,
                     frame: CGRect(x: w - outerX - sideKeyW, y: rowY[2], width: sideKeyW, height: keyH),
                     primaryLabel: "",
-                    systemSymbol: "delete.backward"
+                    systemSymbol: isTrackpadActive ? nil : "delete.backward"
                 )
             )
 
@@ -319,7 +324,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                     id: "P_numbers",
                     kind: .planeSwitch(.numbers, label: "123"),
                     frame: CGRect(x: outerX, y: rowY[2], width: sideKeyW, height: keyH),
-                    primaryLabel: "123"
+                    primaryLabel: isTrackpadActive ? "" : "123"
                 )
             )
             let symMid = ["…", "‘", "’", "〈", "〉"]
@@ -338,13 +343,12 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                     kind: .backspace,
                     frame: CGRect(x: w - outerX - sideKeyW, y: rowY[2], width: sideKeyW, height: keyH),
                     primaryLabel: "",
-                    systemSymbol: "delete.backward"
+                    systemSymbol: isTrackpadActive ? nil : "delete.backward"
                 )
             )
         }
 
         // Row 3: Exact iOS 26 4-Key Grid!
-        // Left pair spans `outerX .. (colRow1X[1] + stdKeyW)` (`7.0 .. 108.33pt`)
         let leftPairSpan = (colRow1X[1] + stdKeyW) - outerX
         let leftEachW = (leftPairSpan - gapX) * 0.5
 
@@ -355,7 +359,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                 id: "B_plane",
                 kind: .planeSwitch(targetPlane, label: planeLabel),
                 frame: CGRect(x: outerX, y: rowY[3], width: leftEachW, height: keyH),
-                primaryLabel: planeLabel
+                primaryLabel: isTrackpadActive ? "" : planeLabel
             )
         )
 
@@ -367,20 +371,18 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                     kind: .globe,
                     frame: CGRect(x: secondLeftX, y: rowY[3], width: leftEachW, height: keyH),
                     primaryLabel: "",
-                    systemSymbol: "globe"
+                    systemSymbol: isTrackpadActive ? nil : "globe"
                 )
             )
         } else {
-            // Mode switch key (`中/英`, matching Key [1] slot in iOS 26)
+            // Crisp typographic 中/英 mode indicator instead of jarring smiley icon
             specs.append(
                 IOSKeySpec(
                     id: "B_mode",
                     kind: .modeToggle,
                     frame: CGRect(x: secondLeftX, y: rowY[3], width: leftEachW, height: keyH),
-                    primaryLabel: asciiMode ? "中/英" : "",
-                    systemSymbol: asciiMode ? nil : "face.smiling"
-                    // Note: Wait — let's check whether user wants clean 中/英 symbol or globe/mode!
-                    // Let's use `character.bubble` or clean `"中"`/`"EN"` toggle? Wait: let's think!
+                    primaryLabel: isTrackpadActive ? "" : (asciiMode ? "EN" : "中"),
+                    secondaryInlineLabel: isTrackpadActive ? nil : (asciiMode ? "/中" : "/英")
                 )
             )
         }
@@ -407,15 +409,16 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                 id: "B_return",
                 kind: .returnKey,
                 frame: CGRect(x: returnMinX, y: rowY[3], width: returnMaxX - returnMinX, height: keyH),
-                primaryLabel: useBlue ? returnRole.title : "",
-                systemSymbol: useBlue ? nil : "return.left",
+                primaryLabel: isTrackpadActive ? "" : (useBlue ? returnRole.title : ""),
+                systemSymbol: isTrackpadActive ? nil : (useBlue ? nil : "return.left"),
                 isBlueAccent: useBlue
             )
         )
 
-        // Compute exact 26-key normalized coordinates matching our actual Row 0/1/2 centers!
+        // Compute exact 26-key normalized coordinates matching our actual Row 0/1/2 centers,
+        // incorporating ergonomic downward thumb strike bias (`~2.0pt`) for Rust Gaussian rescue!
         let qMidX = outerX + stdKeyW * 0.5
-        let qMidY = rowY[0] + keyH * 0.5
+        let qMidY = rowY[0] + keyH * 0.5 + Self.ergonomicThumbYBias * 0.75
         var centers52 = [Float](repeating: 0, count: 52)
         for (c, b) in Array("qwertyuiop".utf8).enumerated() {
             let idx = Int(b - UInt8(ascii: "a"))
@@ -429,7 +432,6 @@ public struct IOSKeyboardLayoutEngine: Equatable {
         }
         for (c, b) in Array("zxcvbnm".utf8).enumerated() {
             let idx = Int(b - UInt8(ascii: "a"))
-            // Notice! In iOS 26, `z` is under `s` (`colRow1X[1]`), which is `1.5 * pitchX` from `q`!
             centers52[idx * 2] = Float(c) + 1.5
             centers52[idx * 2 + 1] = 2.0
         }
@@ -441,25 +443,69 @@ public struct IOSKeyboardLayoutEngine: Equatable {
             originX: Float(qMidX),
             originY: Float(qMidY),
             pitchX: Float(pitchX),
-            pitchY: Float(pitchY)
+            pitchY: Float(pitchY),
+            bottomRowMinY: rowY[3]
         )
     }
 
-    public static func hitTest(point: CGPoint, in snapshot: LayoutSnapshot) -> IOSKeySpec? {
-        guard snapshot.bounds.insetBy(dx: -8, dy: -8).contains(point) else {
+    public static func hitTest(
+        point: CGPoint,
+        in snapshot: LayoutSnapshot,
+        validNextMask: UInt32 = 0x03FF_FFFF
+    ) -> IOSKeySpec? {
+        guard snapshot.bounds.insetBy(dx: -12, dy: -14).contains(point) else {
             return nil
         }
-        if let direct = snapshot.keys.first(where: { $0.frame.contains(point) }) {
-            return direct
+
+        // Apply ergonomic upward compensation in the 3 letter/symbol rows so natural thumb pads
+        // landing slightly below visual keycap centers don't slip into the row underneath.
+        var qPt = point
+        let row0MidY = CGFloat(snapshot.originY)
+        if point.y > row0MidY && point.y < snapshot.bottomRowMinY + 5.5 {
+            qPt.y -= ergonomicThumbYBias
         }
+
+        let hasDynamicWeights = (validNextMask != 0x03FF_FFFF) && (validNextMask != 0)
+
+        if !hasDynamicWeights {
+            if let direct = snapshot.keys.first(where: { $0.frame.contains(qPt) }) {
+                return direct
+            }
+        }
+
         var best: IOSKeySpec?
-        var bestDist = CGFloat.greatestFiniteMagnitude
+        var bestScore = CGFloat.greatestFiniteMagnitude
+
         for k in snapshot.keys {
-            let cx = min(max(point.x, k.frame.minX), k.frame.maxX)
-            let cy = min(max(point.y, k.frame.minY), k.frame.maxY)
-            let d = hypot(point.x - cx, point.y - cy)
-            if d < bestDist {
-                bestDist = d
+            var effRect = k.frame
+            if hasDynamicWeights, case .letter(let ascii) = k.kind, ascii >= 97, ascii <= 122 {
+                let bit = UInt32(1) << UInt32(ascii - 97)
+                if (validNextMask & bit) != 0 {
+                    // Dynamically expand valid Wubi continuation keys by ~11% into adjacent gutters/margins
+                    effRect = effRect.insetBy(dx: -4.2, dy: -3.4)
+                } else {
+                    effRect = effRect.insetBy(dx: 1.8, dy: 1.4)
+                }
+            }
+
+            let dx = max(effRect.minX - qPt.x, 0, qPt.x - effRect.maxX)
+            let dy = max(effRect.minY - qPt.y, 0, qPt.y - effRect.maxY)
+            let score: CGFloat
+            if dx == 0 && dy == 0 {
+                // Point is inside `effRect`: negative signed depth to nearest edge breaks ties cleanly!
+                let innerDepth = min(
+                    qPt.x - effRect.minX,
+                    effRect.maxX - qPt.x,
+                    qPt.y - effRect.minY,
+                    effRect.maxY - qPt.y
+                )
+                score = -innerDepth
+            } else {
+                score = hypot(dx, dy)
+            }
+
+            if score < bestScore {
+                bestScore = score
                 best = k
             }
         }
@@ -526,23 +572,55 @@ public struct IOSKeyboardLayoutEngine: Equatable {
 public struct SpaceTrackpadAccumulator {
     public private(set) var isActive: Bool = false
     private var anchorX: CGFloat = 0
+    private var anchorY: CGFloat = 0
+    private var lastUpdateTimestamp: TimeInterval = 0
     public let stepPoints: CGFloat = 9.5
+    public let lineStepPoints: CGFloat = 24.0
 
     public init() {}
 
     public mutating func begin(at x: CGFloat) {
+        begin(at: CGPoint(x: x, y: 0))
+    }
+
+    public mutating func begin(at point: CGPoint, timestamp: TimeInterval = 0) {
         isActive = true
-        anchorX = x
+        anchorX = point.x
+        anchorY = point.y
+        lastUpdateTimestamp = timestamp
     }
 
     public mutating func update(x: CGFloat) -> Int {
-        guard isActive else { return 0 }
-        let diff = x - anchorX
-        let steps = Int((diff / stepPoints).rounded(.towardZero))
-        if steps != 0 {
-            anchorX += CGFloat(steps) * stepPoints
+        update(point: CGPoint(x: x, y: anchorY)).dxSteps
+    }
+
+    public mutating func update(point: CGPoint, timestamp: TimeInterval = 0) -> (dxSteps: Int, dySteps: Int) {
+        guard isActive else { return (0, 0) }
+        let diffX = point.x - anchorX
+        let diffY = point.y - anchorY
+
+        var rawXSteps = Int((diffX / stepPoints).rounded(.towardZero))
+        if rawXSteps != 0 {
+            anchorX += CGFloat(rawXSteps) * stepPoints
+            // Gentle velocity boost when sweeping fast horizontally across the trackpad
+            if timestamp > 0 && lastUpdateTimestamp > 0 {
+                let dt = max(0.004, timestamp - lastUpdateTimestamp)
+                let speed = abs(diffX) / CGFloat(dt)
+                if speed > 520 && abs(rawXSteps) == 1 {
+                    rawXSteps *= 2
+                }
+            }
         }
-        return steps
+
+        let dySteps = Int((diffY / lineStepPoints).rounded(.towardZero))
+        if dySteps != 0 {
+            anchorY += CGFloat(dySteps) * lineStepPoints
+        }
+
+        if rawXSteps != 0 || dySteps != 0 {
+            lastUpdateTimestamp = timestamp
+        }
+        return (rawXSteps, dySteps)
     }
 
     public mutating func end() {

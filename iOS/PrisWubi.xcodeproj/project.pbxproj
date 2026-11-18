@@ -19,7 +19,6 @@
 		76AFF18C7BEFF64DA84073A0 /* IOSKeyCanvasAndCallout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F041469F3DCD105F71210FD /* IOSKeyCanvasAndCallout.swift */; };
 		A6A25F15C0133AD063D0332D /* Dicts in Resources */ = {isa = PBXBuildFile; fileRef = 93C2D593570B7763381F20F0 /* Dicts */; };
 		DB5E7BE9DD8ED93742F22633 /* IOSCandidateViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADD2833DB2E106E705330613 /* IOSCandidateViews.swift */; };
-		DCA58391121FB153EFF2521C /* OverlapReplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6E127A5536F79FAE011E67E /* OverlapReplay.swift */; };
 		E6206E6B38C847EC62265FFA /* PrisWubiSimulatorUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FFF3375C4BC3338F1EE5887 /* PrisWubiSimulatorUITests.swift */; };
 		EFC916408F32DE17BE4B4043 /* IOSKeyboardLayoutEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FFA5F9F9F1257560BC74D3C /* IOSKeyboardLayoutEngine.swift */; };
 		F23FD72AB4DFDD79E3EDA8E2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 46FCA1D0F62C2828D4C3FD00 /* Assets.xcassets */; };
@@ -68,7 +67,6 @@
 		93C2D593570B7763381F20F0 /* Dicts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Dicts; path = ../Resources/Dicts; sourceTree = SOURCE_ROOT; };
 		A36B024EC8D33514A9296D11 /* PrisWubiApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PrisWubiApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		ADD2833DB2E106E705330613 /* IOSCandidateViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSCandidateViews.swift; sourceTree = "<group>"; };
-		B6E127A5536F79FAE011E67E /* OverlapReplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlapReplay.swift; sourceTree = "<group>"; };
 		C3133045909EAEA851371DF0 /* WubiCoreBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WubiCoreBridge.swift; sourceTree = "<group>"; };
 		CB29750C72814D83C60B861B /* PrisWubiUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PrisWubiUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DFD2549046A68359BCF56EAD /* KeyboardViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardViewController.swift; sourceTree = "<group>"; };
@@ -88,7 +86,6 @@
 		67A4BE0E71FC6E0696FDBBA5 /* UITests */ = {
 			isa = PBXGroup;
 			children = (
-				B6E127A5536F79FAE011E67E /* OverlapReplay.swift */,
 				2FFF3375C4BC3338F1EE5887 /* PrisWubiSimulatorUITests.swift */,
 			);
 			path = UITests;
@@ -327,7 +324,6 @@
 			files = (
 				76AFF18C7BEFF64DA84073A0 /* IOSKeyCanvasAndCallout.swift in Sources */,
 				EFC916408F32DE17BE4B4043 /* IOSKeyboardLayoutEngine.swift in Sources */,
-				DCA58391121FB153EFF2521C /* OverlapReplay.swift in Sources */,
 				E6206E6B38C847EC62265FFA /* PrisWubiSimulatorUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

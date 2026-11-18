@@ -79,9 +79,10 @@ fn serialize_action_and_state(engine: &WubiEngine, act: Option<&EngineOutput>) -
         .filter(|k| k.samples > 0)
         .count();
     j.push_str(&format!(
-        ",\"userPhraseCount\":{},\"calibratedKeyCount\":{},\"candidates\":[",
+        ",\"userPhraseCount\":{},\"calibratedKeyCount\":{},\"validNextMask\":{},\"candidates\":[",
         engine.user.phrases.len(),
-        calibrated_keys
+        calibrated_keys,
+        engine.valid_next_mask()
     ));
 
     for (idx, c) in engine.page_candidates().iter().enumerate() {

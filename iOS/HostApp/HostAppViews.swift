@@ -106,11 +106,50 @@ public struct IOSHostRootView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     // Hero Banner
                     HStack(spacing: 14) {
-                        Image("FormordoMark")
-                            .resizable()
-                            .frame(width: 54, height: 54)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .accessibilityHidden(true)
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 0.98, green: 0.97, blue: 0.94),
+                                            Color(red: 0.91, green: 0.89, blue: 0.85),
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                        .strokeBorder(Color.black.opacity(0.08), lineWidth: 0.7)
+                                )
+                                .frame(width: 54, height: 54)
+
+                            Canvas { ctx, size in
+                                let s = min(size.width, size.height) / 100.0
+                                var nib = Path()
+                                nib.move(to: CGPoint(x: 50 * s, y: 14 * s))
+                                nib.addLine(to: CGPoint(x: 78 * s, y: 54 * s))
+                                nib.addLine(to: CGPoint(x: 68 * s, y: 78 * s))
+                                nib.addLine(to: CGPoint(x: 32 * s, y: 78 * s))
+                                nib.addLine(to: CGPoint(x: 22 * s, y: 54 * s))
+                                nib.closeSubpath()
+                                let ink = Color(red: 0.11, green: 0.12, blue: 0.15)
+                                let vermilion = Color(red: 0.86, green: 0.27, blue: 0.21)
+                                ctx.fill(nib, with: .color(ink))
+
+                                var slit = Path()
+                                slit.move(to: CGPoint(x: 50 * s, y: 15 * s))
+                                slit.addLine(to: CGPoint(x: 50 * s, y: 49 * s))
+                                ctx.stroke(slit, with: .color(vermilion), style: StrokeStyle(lineWidth: 4.5 * s, lineCap: .round))
+
+                                let eye = CGRect(x: 43.5 * s, y: 45.5 * s, width: 13 * s, height: 13 * s)
+                                ctx.fill(Path(ellipseIn: eye), with: .color(vermilion))
+
+                                let bar = CGRect(x: 30 * s, y: 82 * s, width: 40 * s, height: 7 * s)
+                                ctx.fill(Path(roundedRect: bar, cornerRadius: 3.5 * s), with: .color(ink))
+                            }
+                            .frame(width: 38, height: 38)
+                        }
                         VStack(alignment: .leading, spacing: 3) {
                             Text("形序 Formordo")
                                 .font(.system(size: 20, weight: .bold))

@@ -1,7 +1,75 @@
+import UIKit
 import XCTest
+
+private final class SyntheticFingerTouch: UITouch {
+    var mockPoint: CGPoint = .zero
+    var mockTimestamp: TimeInterval = 0
+    override func location(in view: UIView?) -> CGPoint { mockPoint }
+    override var timestamp: TimeInterval { mockTimestamp }
+}
 
 final class PrisWubiSimulatorUITests: XCTestCase {
     @MainActor private static var midPressShot: XCUIScreenshot?
+
+    @MainActor
+    func testMultiTouchRolloverAndLiftFlickHysteresis() {
+        let canvas = IOSKeyCanvasView()
+        let snapshot = IOSKeyboardLayoutEngine().computeLayout(in: CGSize(width: 440, height: 219))
+        canvas.updateSnapshot(snapshot)
+
+        var committed = ""
+        canvas.onKeyTouchUp = { spec, _ in
+            committed += spec.primaryLabel
+        }
+
+        // 1. Overlapping two-thumb rollover (32 consecutive overlapping taps where finger N+1
+        //    presses down BEFORE finger N lifts, and finger N drifts into the candidate ribbon on lift!)
+        let sequence = String(repeating: "rtdgthtc", count: 4)
+        var clock: TimeInterval = 100.0
+        var prevTouch: SyntheticFingerTouch?
+
+        for ch in sequence {
+            let key = snapshot.keys.first { $0.primaryLabel == String(ch) }!
+            let nextTouch = SyntheticFingerTouch()
+            nextTouch.mockPoint = CGPoint(x: key.frame.midX, y: key.frame.midY)
+            nextTouch.mockTimestamp = clock
+            canvas.touchesBegan([nextTouch], with: nil)
+
+            if let prev = prevTouch {
+                // Previous thumb flicks 18pt upward into candidate bar while lifting 22ms later
+                clock += 0.022
+                prev.mockPoint = CGPoint(x: prev.mockPoint.x + 8.0, y: -18.0)
+                prev.mockTimestamp = clock
+                canvas.touchesMoved([prev], with: nil)
+                canvas.touchesEnded([prev], with: nil)
+            }
+            prevTouch = nextTouch
+            clock += 0.035
+        }
+        if let last = prevTouch {
+            clock += 0.030
+            last.mockPoint = CGPoint(x: last.mockPoint.x - 7.0, y: -16.0)
+            last.mockTimestamp = clock
+            canvas.touchesMoved([last], with: nil)
+            canvas.touchesEnded([last], with: nil)
+        }
+        XCTAssertEqual(committed, sequence, "Zero dropped or reordered keys under overlapping rollover + ribbon lift")
+
+        // 2. Rapid sub-85ms lift-roll across neighbor border (`t` -> rolled 8pt right onto `y` edge on release)
+        committed = ""
+        let tKey = snapshot.keys.first { $0.primaryLabel == "t" }!
+        let flick = SyntheticFingerTouch()
+        flick.mockPoint = CGPoint(x: tKey.frame.midX, y: tKey.frame.midY)
+        flick.mockTimestamp = 200.0
+        canvas.touchesBegan([flick], with: nil)
+
+        // 45ms later, thumb rolls 8pt into neighbor `y` while lifting: sticky press-lock keeps `t`!
+        flick.mockPoint = CGPoint(x: tKey.frame.maxX + 8.0, y: tKey.frame.midY + 4.0)
+        flick.mockTimestamp = 200.045
+        canvas.touchesMoved([flick], with: nil)
+        canvas.touchesEnded([flick], with: nil)
+        XCTAssertEqual(committed, "t", "Sub-85ms thumb lift-roll must stay locked on initial key 't'")
+    }
 
     @MainActor
     func testEnableKeyboardAndLiveWubiTyping() throws {
@@ -112,6 +180,44 @@ final class PrisWubiSimulatorUITests: XCTestCase {
             attachShot(name: "03-live-priswubi-callout-q-fallback")
         }
         // Clear the single `q` composition via backspace (`dx = 0.935, dy = 0.837`)
+        tapNorm(app, dx: 0.935, dy: 0.837)
+        Thread.sleep(forTimeInterval: 0.25)
+
+        // 3a. Hold Row-0 interior `r` key (`dx = 0.352, dy = 0.720`) to verify symmetric Row-0 docked popout!
+        Self.midPressShot = nil
+        let rTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                Self.midPressShot = XCUIScreen.main.screenshot()
+            }
+        }
+        RunLoop.main.add(rTimer, forMode: .common)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.352, dy: 0.720)).press(forDuration: 0.75)
+        Thread.sleep(forTimeInterval: 0.25)
+        if let midShot = Self.midPressShot {
+            let att = XCTAttachment(screenshot: midShot)
+            att.name = "03a-live-priswubi-callout-r"
+            att.lifetime = .keepAlways
+            add(att)
+        }
+        tapNorm(app, dx: 0.935, dy: 0.837)
+        Thread.sleep(forTimeInterval: 0.25)
+
+        // 3b. Hold the second-row `h` key (`dx = 0.598, dy = 0.778`) to verify standalone floating squircle parity!
+        Self.midPressShot = nil
+        let hTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { _ in
+            MainActor.assumeIsolated {
+                Self.midPressShot = XCUIScreen.main.screenshot()
+            }
+        }
+        RunLoop.main.add(hTimer, forMode: .common)
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.598, dy: 0.778)).press(forDuration: 0.75)
+        Thread.sleep(forTimeInterval: 0.25)
+        if let midShot = Self.midPressShot {
+            let att = XCTAttachment(screenshot: midShot)
+            att.name = "03b-live-priswubi-callout-h"
+            att.lifetime = .keepAlways
+            add(att)
+        }
         tapNorm(app, dx: 0.935, dy: 0.837)
         Thread.sleep(forTimeInterval: 0.25)
 

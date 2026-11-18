@@ -378,6 +378,54 @@ impl DictView {
         false
     }
 
+    /// Return a 26-bit mask (`bit i` = `'a' + i`) of letters that yield at least one valid code
+    /// starting with `[prefix_bytes..., letter]` (`1 <= prefix_bytes.len() <= 3`).
+    pub fn valid_next_letters_mask(&self, prefix_bytes: &[u8], include_rare: bool) -> u32 {
+        if prefix_bytes.is_empty() || prefix_bytes.len() >= 4 {
+            return 0x03FF_FFFF;
+        }
+        let mut buf = [0u8; 4];
+        let n = prefix_bytes.len();
+        buf[..n].copy_from_slice(prefix_bytes);
+        let mut mask = 0u32;
+        for idx in 0..25u8 {
+            buf[n] = b'a' + idx;
+            let Some(ext) = PackedCode::from_bytes(&buf[..=n]) else {
+                continue;
+            };
+            let (lo, hi) = ext.prefix_range();
+            let mut b_idx = self.lower_bound_bucket(lo);
+            while b_idx < self.bucket_count {
+                let (c, start, count) = self.bucket_at(b_idx);
+                if c > hi {
+                    break;
+                }
+                if include_rare {
+                    if count > 0 {
+                        mask |= 1u32 << idx;
+                        break;
+                    }
+                } else {
+                    let mut found = false;
+                    for i in start..start + count {
+                        if let Some(e) = self.entry_at(i, c) {
+                            if !e.is_ext_rare() {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if found {
+                        mask |= 1u32 << idx;
+                        break;
+                    }
+                }
+                b_idx += 1;
+            }
+        }
+        mask
+    }
+
     /// Prefix completion lookup for codes strictly longer than `prefix`.
     pub fn lookup_longer_prefix(
         &self,

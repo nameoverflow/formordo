@@ -12,19 +12,25 @@ public final class KeyboardViewController: UIInputViewController {
     private let expandedGrid = IOSExpandedCandidateView()
     private let calloutView = IOSKeyCalloutView()
 
-    private let previewHeadroom: CGFloat = 28
     private var heightConstraint: NSLayoutConstraint?
     private var saveUserDataTimer: Timer?
     private var backspaceTimer: Timer?
-    private var backspaceHoldTicks: Int = 0
-    private var lastLayout: (IOSKeyboardLayoutEngine, CGSize)?
+    private var backspaceHoldStart: TimeInterval = 0
+    private var lastVisualKeySignature: VisualLayoutSignature?
     private var planeBeforePress: IOSKeyPlane = .letters
     private var markedCode = ""
-    private lazy var lightHaptic: UIImpactFeedbackGenerator = {
-        if #available(iOS 17.5, *) { return UIImpactFeedbackGenerator(style: .light, view: keyCanvas) }
-        return UIImpactFeedbackGenerator(style: .light)
-    }()
-    private let selectionHaptic = UISelectionFeedbackGenerator()
+
+    private lazy var feedback = IOSKeyboardFeedbackController(attachingTo: keyCanvas)
+
+    private struct VisualLayoutSignature: Equatable {
+        let plane: IOSKeyPlane
+        let shiftState: IOSShiftState
+        let asciiMode: Bool
+        let showInlineGlobeKey: Bool
+        let returnRole: IOSReturnKeyRole
+        let isTrackpadActive: Bool
+        let size: CGSize
+    }
 
     public override func viewDidLoad() {
         super.viewDidLoad()
@@ -34,7 +40,7 @@ public final class KeyboardViewController: UIInputViewController {
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        lightHaptic.prepare()
+        feedback.prepare()
         bridge.loadConfigAndUser()
         syncEngineToUI()
     }
@@ -42,17 +48,20 @@ public final class KeyboardViewController: UIInputViewController {
     public override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         stopBackspaceRepeat()
+        calloutView.hideImmediately()
+        keyCanvas.coveredCalloutKeyId = nil
         saveUserDataTimer?.invalidate()
         cancelMarkedCode()
         bridge.clearComposition()
         bridge.flushUserDataIfNeeded()
+        feedback.suspend()
     }
 
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let isLandscape = view.bounds.width > 540
         // 44pt candidate ribbon + 219pt 4-row keyboard (`keyH = 45pt`) = 263pt matching iOS 26 native height
-        let targetH: CGFloat = (isLandscape ? 204 : 263) + previewHeadroom
+        let targetH: CGFloat = isLandscape ? 204 : 263
         if heightConstraint?.constant != targetH {
             heightConstraint?.constant = targetH
         }
@@ -68,12 +77,13 @@ public final class KeyboardViewController: UIInputViewController {
         guard let inputView = self.inputView else { return }
         inputView.allowsSelfSizing = true
         inputView.clipsToBounds = false
+        view.clipsToBounds = false
 
         glassBackdrop.translatesAutoresizingMaskIntoConstraints = false
         glassBackdrop.layer.cornerRadius = IOSKeyboardLayoutEngine.trayTopCornerRadius
         glassBackdrop.layer.cornerCurve = .continuous
         glassBackdrop.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        glassBackdrop.layer.borderWidth = 0.5
+        glassBackdrop.isUserInteractionEnabled = false
 
         ribbonView.translatesAutoresizingMaskIntoConstraints = false
         ribbonView.accessibilityIdentifier = "PrisWubiRibbon"
@@ -90,7 +100,7 @@ public final class KeyboardViewController: UIInputViewController {
         inputView.addSubview(expandedGrid)
         inputView.addSubview(calloutView)
 
-        let hc = inputView.heightAnchor.constraint(equalToConstant: 263 + previewHeadroom)
+        let hc = inputView.heightAnchor.constraint(equalToConstant: 263)
         hc.priority = .defaultHigh
         self.heightConstraint = hc
 
@@ -101,7 +111,7 @@ public final class KeyboardViewController: UIInputViewController {
             glassBackdrop.trailingAnchor.constraint(equalTo: inputView.trailingAnchor),
             glassBackdrop.bottomAnchor.constraint(equalTo: inputView.bottomAnchor),
 
-            ribbonView.topAnchor.constraint(equalTo: inputView.topAnchor, constant: previewHeadroom),
+            ribbonView.topAnchor.constraint(equalTo: inputView.topAnchor),
             ribbonView.leadingAnchor.constraint(equalTo: inputView.leadingAnchor),
             ribbonView.trailingAnchor.constraint(equalTo: inputView.trailingAnchor),
             ribbonView.heightAnchor.constraint(equalToConstant: IOSKeyboardLayoutEngine.candidateBarHeight),
@@ -115,37 +125,76 @@ public final class KeyboardViewController: UIInputViewController {
             expandedGrid.leadingAnchor.constraint(equalTo: inputView.leadingAnchor),
             expandedGrid.trailingAnchor.constraint(equalTo: inputView.trailingAnchor),
             expandedGrid.bottomAnchor.constraint(equalTo: inputView.bottomAnchor),
-
         ])
 
         wireCallbacks()
         syncProxyTraits()
     }
 
+    private func presentCalloutIfAppropriate(for spec: IOSKeySpec) {
+        guard !layoutEngine.isTrackpadActive else {
+            calloutView.hideImmediately()
+            keyCanvas.coveredCalloutKeyId = nil
+            return
+        }
+        switch spec.kind {
+        case .letter:
+            let frameInRoot = keyCanvas.convert(spec.frame, to: inputView)
+            let isDocked = calloutView.present(
+                label: spec.primaryLabel,
+                keyId: spec.id,
+                over: frameInRoot,
+                dark: isDarkAppearance
+            )
+            keyCanvas.coveredCalloutKeyId = isDocked ? spec.id : nil
+        case .symbol(let sym) where sym.count <= 2:
+            let frameInRoot = keyCanvas.convert(spec.frame, to: inputView)
+            let isDocked = calloutView.present(
+                label: spec.primaryLabel,
+                keyId: spec.id,
+                over: frameInRoot,
+                dark: isDarkAppearance
+            )
+            keyCanvas.coveredCalloutKeyId = isDocked ? spec.id : nil
+        default:
+            calloutView.hideImmediately()
+            keyCanvas.coveredCalloutKeyId = nil
+        }
+    }
+
     private func wireCallbacks() {
         keyCanvas.onKeyTouchDown = { [weak self] spec in
             guard let self else { return }
-            UIDevice.current.playInputClick()
-            self.lightHaptic.impactOccurred(intensity: 0.85)
-            self.lightHaptic.prepare()
+            self.feedback.fireKeyDown()
             switch spec.kind {
-            case .letter:
-                if !self.layoutEngine.isTrackpadActive {
-                    let frameInRoot = self.keyCanvas.convert(spec.frame, to: self.inputView)
-                    self.calloutView.present(label: spec.primaryLabel, over: frameInRoot, dark: self.isDarkAppearance)
-                }
+            case .letter, .symbol:
+                self.presentCalloutIfAppropriate(for: spec)
             case .planeSwitch(let plane, _):
-                self.calloutView.isHidden = true
+                self.calloutView.hideImmediately()
+                self.keyCanvas.coveredCalloutKeyId = nil
                 self.planeBeforePress = self.layoutEngine.plane
                 self.commitPendingFirstIfComposing()
                 self.layoutEngine.switchPlane(plane)
                 self.syncEngineToUI()
             case .backspace:
-                self.calloutView.isHidden = true
+                self.calloutView.hideImmediately()
+                self.keyCanvas.coveredCalloutKeyId = nil
                 self.performBackspace()
                 self.startBackspaceRepeat()
             default:
-                self.calloutView.isHidden = true
+                self.calloutView.hideImmediately()
+                self.keyCanvas.coveredCalloutKeyId = nil
+            }
+        }
+
+        keyCanvas.onKeySlidePreview = { [weak self] spec in
+            guard let self else { return }
+            if let spec {
+                self.feedback.fireSoftStep(playClick: false)
+                self.presentCalloutIfAppropriate(for: spec)
+            } else {
+                self.calloutView.hideImmediately()
+                self.keyCanvas.coveredCalloutKeyId = nil
             }
         }
 
@@ -156,59 +205,65 @@ public final class KeyboardViewController: UIInputViewController {
         }
 
         keyCanvas.onKeyTouchCancel = { [weak self] in
-            self?.calloutView.isHidden = true
+            self?.calloutView.hideImmediately()
+            self?.keyCanvas.coveredCalloutKeyId = nil
             self?.stopBackspaceRepeat()
         }
 
         keyCanvas.onKeyTouchUp = { [weak self] spec, rawPointInCanvas in
             guard let self else { return }
+            self.keyCanvas.coveredCalloutKeyId = nil
             self.calloutView.releasePreview()
             self.stopBackspaceRepeat()
             self.handleKeyRelease(spec: spec, pointInCanvas: rawPointInCanvas)
         }
 
-        keyCanvas.onEndLetterPreview = { [weak self] in self?.calloutView.releasePreview() }
-        keyCanvas.onLetterPress = { [weak self] key, point in
-            self?.handleKeyRelease(spec: key, pointInCanvas: point)
-        }
-
         keyCanvas.onTrackpadStateChanged = { [weak self] active in
             guard let self else { return }
-            self.calloutView.isHidden = true
+            self.calloutView.hideImmediately()
+            self.keyCanvas.coveredCalloutKeyId = nil
             self.layoutEngine.isTrackpadActive = active
             if active {
                 self.commitPendingFirstIfComposing()
                 self.syncEngineToUI()
-                self.selectionHaptic.selectionChanged()
+                self.feedback.fireSoftStep(playClick: false)
             }
             self.refreshKeyboardLayout()
         }
 
-        keyCanvas.onTrackpadStep = { [weak self] delta in
-            guard let self else { return }
-            if !self.bridge.state.preedit.isEmpty {
-                return
+        keyCanvas.onTrackpadMove = { [weak self] dxSteps, dySteps in
+            guard let self, self.bridge.state.preedit.isEmpty else { return }
+            var moved = false
+            if dxSteps != 0 {
+                self.textDocumentProxy.adjustTextPosition(byCharacterOffset: dxSteps)
+                moved = true
             }
-            self.textDocumentProxy.adjustTextPosition(byCharacterOffset: delta)
-            self.selectionHaptic.selectionChanged()
+            if dySteps != 0 {
+                if self.moveCursorVertically(lines: dySteps) {
+                    moved = true
+                }
+            }
+            if moved {
+                self.feedback.fireSoftStep(playClick: false)
+            }
         }
 
         ribbonView.onSelectCandidate = { [weak self] relIdx in
             guard let self else { return }
-            UIDevice.current.playInputClick()
+            self.feedback.fireSoftStep(playClick: true)
             let out = self.bridge.selectCandidate(pageRelIndex: relIdx, timestampMs: Self.nowMs())
             self.applyEngineState(out)
         }
 
         ribbonView.onSelectStarterWord = { [weak self] word in
             guard let self else { return }
-            UIDevice.current.playInputClick()
+            self.feedback.fireSoftStep(playClick: true)
             self.textDocumentProxy.insertText(word)
         }
 
         ribbonView.onTapChevron = { [weak self] in
             guard let self else { return }
-            UIDevice.current.playInputClick()
+            self.feedback.fireSoftStep(playClick: true)
             guard !self.bridge.state.preedit.isEmpty else { return }
             self.expandedGrid.isHidden.toggle()
             let isExp = !self.expandedGrid.isHidden
@@ -221,7 +276,7 @@ public final class KeyboardViewController: UIInputViewController {
 
         expandedGrid.onSelectAbsCandidate = { [weak self] absIdx in
             guard let self else { return }
-            UIDevice.current.playInputClick()
+            self.feedback.fireSoftStep(playClick: true)
             self.expandedGrid.isHidden = true
             self.keyCanvas.isHidden = false
             self.ribbonView.setExpanded(false)
@@ -230,12 +285,14 @@ public final class KeyboardViewController: UIInputViewController {
         }
 
         expandedGrid.onCollapse = { [weak self] in
+            self?.feedback.fireSoftStep(playClick: true)
             self?.expandedGrid.isHidden = true
             self?.keyCanvas.isHidden = false
             self?.ribbonView.setExpanded(false)
         }
 
         expandedGrid.onBackspace = { [weak self] in
+            self?.feedback.fireKeyDown()
             self?.performBackspace()
             if let self, !self.expandedGrid.isHidden {
                 if self.bridge.state.preedit.isEmpty {
@@ -249,6 +306,7 @@ public final class KeyboardViewController: UIInputViewController {
         }
 
         expandedGrid.onClear = { [weak self] in
+            self?.feedback.fireSoftStep(playClick: true)
             self?.cancelMarkedCode()
             self?.bridge.clearComposition()
             self?.expandedGrid.isHidden = true
@@ -256,7 +314,6 @@ public final class KeyboardViewController: UIInputViewController {
             self?.ribbonView.setExpanded(false)
             self?.syncEngineToUI()
         }
-
     }
 
     private func handleKeyRelease(spec: IOSKeySpec, pointInCanvas: CGPoint) {
@@ -338,34 +395,102 @@ public final class KeyboardViewController: UIInputViewController {
         bridge.clearComposition()
     }
 
-    private func performBackspace() {
-        if bridge.state.preedit.isEmpty {
-            textDocumentProxy.deleteBackward()
-        } else {
+    private func performBackspace(acceleratedChunk: Bool = false) {
+        if !bridge.state.preedit.isEmpty {
             let out = bridge.handleKey(keyCode: 0x33, scalar: 0, hasCmdOrCtrl: false, timestampMs: Self.nowMs())
             applyEngineState(out)
+            return
+        }
+        guard acceleratedChunk, let before = textDocumentProxy.documentContextBeforeInput, !before.isEmpty else {
+            textDocumentProxy.deleteBackward()
+            return
+        }
+        // Native-style accelerated hold-delete: erase up to 3 characters without crossing a newline in one jump
+        if before.last == "\n" {
+            textDocumentProxy.deleteBackward()
+            return
+        }
+        var count = 0
+        for ch in before.reversed() {
+            if ch == "\n" || count >= 3 { break }
+            count += 1
+            if count >= 2 && (ch == " " || ch == "，" || ch == "。" || ch == "," || ch == ".") {
+                break
+            }
+        }
+        for _ in 0..<max(1, count) {
+            textDocumentProxy.deleteBackward()
         }
     }
 
     private func startBackspaceRepeat() {
         stopBackspaceRepeat()
-        backspaceHoldTicks = 0
-        backspaceTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-            Task { @MainActor in
+        backspaceHoldStart = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 0.068, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
                 guard let self else { return }
-                self.backspaceHoldTicks += 1
-                if self.backspaceHoldTicks >= 5 {
-                    UIDevice.current.playInputClick()
-                    self.performBackspace()
-                }
+                let held = ProcessInfo.processInfo.systemUptime - self.backspaceHoldStart
+                guard held >= 0.36 else { return }
+                let fastMode = (held >= 1.55) && self.bridge.state.preedit.isEmpty
+                self.feedback.fireSoftStep(playClick: true)
+                self.performBackspace(acceleratedChunk: fastMode)
             }
         }
+        backspaceTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func stopBackspaceRepeat() {
         backspaceTimer?.invalidate()
         backspaceTimer = nil
-        backspaceHoldTicks = 0
+    }
+
+    /// Move cursor vertically across lines in multi-line text views using `UITextDocumentProxy` context.
+    private func moveCursorVertically(lines: Int) -> Bool {
+        guard lines != 0 else { return false }
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let after = textDocumentProxy.documentContextAfterInput ?? ""
+
+        // Current column from most recent newline in `before`
+        let currentCol: Int
+        if let lastNL = before.lastIndex(of: "\n") {
+            currentCol = before.distance(from: before.index(after: lastNL), to: before.endIndex)
+        } else {
+            currentCol = before.count
+        }
+
+        if lines < 0 {
+            guard let lastNL = before.lastIndex(of: "\n") else {
+                if !before.isEmpty {
+                    textDocumentProxy.adjustTextPosition(byCharacterOffset: -before.count)
+                    return true
+                }
+                return false
+            }
+            let prevPrefix = before[..<lastNL]
+            let prevLineStart = prevPrefix.lastIndex(of: "\n").map { prevPrefix.index(after: $0) } ?? prevPrefix.startIndex
+            let prevLineLen = prevPrefix.distance(from: prevLineStart, to: prevPrefix.endIndex)
+            let targetCol = min(currentCol, prevLineLen)
+            let delta = -(currentCol + 1 + (prevLineLen - targetCol))
+            textDocumentProxy.adjustTextPosition(byCharacterOffset: delta)
+            return true
+        } else {
+            guard let nextNL = after.firstIndex(of: "\n") else {
+                if !after.isEmpty {
+                    textDocumentProxy.adjustTextPosition(byCharacterOffset: after.count)
+                    return true
+                }
+                return false
+            }
+            let toEndOfCurLine = after.distance(from: after.startIndex, to: nextNL)
+            let rem = after[after.index(after: nextNL)...]
+            let nextLineEnd = rem.firstIndex(of: "\n") ?? rem.endIndex
+            let nextLineLen = rem.distance(from: rem.startIndex, to: nextLineEnd)
+            let targetCol = min(currentCol, nextLineLen)
+            let delta = toEndOfCurLine + 1 + targetCol
+            textDocumentProxy.adjustTextPosition(byCharacterOffset: delta)
+            return true
+        }
     }
 
     private func cancelMarkedCode() {
@@ -377,7 +502,6 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func applyEngineState(_ out: WubiActionState) {
         if !out.commitText.isEmpty {
-            // insertText replaces the current marked range in a single editor operation.
             textDocumentProxy.insertText(out.commitText)
             markedCode = ""
             saveUserDataTimer?.invalidate()
@@ -404,6 +528,8 @@ public final class KeyboardViewController: UIInputViewController {
         layoutEngine.asciiMode = st.asciiMode
         layoutEngine.schemaId = st.schemaId
         layoutEngine.isComposing = !st.preedit.isEmpty
+        layoutEngine.validNextMask = st.validNextMask
+        keyCanvas.validNextMask = st.validNextMask
         ribbonView.update(state: st, dark: isDarkAppearance)
         refreshKeyboardLayout()
     }
@@ -413,7 +539,6 @@ public final class KeyboardViewController: UIInputViewController {
         layoutEngine.returnRole = Self.mapReturnKeyType(textDocumentProxy.returnKeyType)
         let dark = isDarkAppearance
 
-        // Keep backdrop completely transparent so iOS 26's native system Liquid Glass vibrancy shines through!
         glassBackdrop.backgroundColor = .clear
         glassBackdrop.layer.borderWidth = 0
 
@@ -424,8 +549,18 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func refreshKeyboardLayout() {
         guard keyCanvas.bounds.width > 10, keyCanvas.bounds.height > 10 else { return }
-        if let (previous, size) = lastLayout, previous == layoutEngine, size == keyCanvas.bounds.size { return }
-        lastLayout = (layoutEngine, keyCanvas.bounds.size)
+        let sig = VisualLayoutSignature(
+            plane: layoutEngine.plane,
+            shiftState: layoutEngine.shiftState,
+            asciiMode: layoutEngine.asciiMode,
+            showInlineGlobeKey: layoutEngine.showInlineGlobeKey,
+            returnRole: layoutEngine.returnRole,
+            isTrackpadActive: layoutEngine.isTrackpadActive,
+            size: keyCanvas.bounds.size
+        )
+        if lastVisualKeySignature == sig { return }
+        lastVisualKeySignature = sig
+
         let snap = layoutEngine.computeLayout(in: keyCanvas.bounds.size)
         keyCanvas.updateSnapshot(snap)
         bridge.setKeyLayout(

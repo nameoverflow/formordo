@@ -259,6 +259,31 @@ impl WubiEngine {
         }
     }
 
+    /// 26-bit mask (`bit i` = `'a' + i`) of letters valid as the next Wubi keystroke.
+    /// Used by iOS touch hit-testing to dynamically expand valid next-key boundaries.
+    pub fn valid_next_mask(&self) -> u32 {
+        const ALL_26: u32 = 0x03FF_FFFF;
+        if self.ascii_mode {
+            return ALL_26;
+        }
+        let bytes = self.raw_code.as_bytes();
+        if bytes.is_empty() || bytes.len() >= 4 || bytes.contains(&b'z') {
+            return ALL_26;
+        }
+        let mut mask = self.user.valid_next_letters_mask(bytes);
+        if let Some(dict) = self.active_dict() {
+            mask |= dict.valid_next_letters_mask(bytes, self.config.enable_rare_charset);
+        }
+        // If current prefix has no exact continuations at all (e.g. already a typo), stay neutral.
+        if mask == 0 {
+            return ALL_26;
+        }
+        if self.config.z_omnipotent {
+            mask |= 1u32 << 25;
+        }
+        mask
+    }
+
     /// Push a touchscreen letter tap with view/normalized coordinates `(x, y)` (used by iOS keyboard & touch tests).
     pub fn push_touch_letter(
         &mut self,
@@ -273,12 +298,35 @@ impl WubiEngine {
         } else {
             self.key_layout.view_to_norm(view_x, view_y)
         };
-        // If adaptive hitbox shifted the nearest key center, snap the primary key when appropriate!
+        let reported_lower = reported_ch.to_ascii_lowercase();
         let adapted_ch = if self.config.typo.enabled && self.config.typo.touch_hitbox_adapt {
-            self.key_layout
-                .nearest_key(nx, ny, &self.user.touch_profile, true)
+            let nearest = self
+                .key_layout
+                .nearest_key(nx, ny, &self.user.touch_profile, true);
+            let mask = self.valid_next_mask();
+            if nearest != reported_lower
+                && reported_lower.is_ascii_lowercase()
+                && mask != 0x03FF_FFFF
+            {
+                let rep_bit = 1u32 << (reported_lower - b'a');
+                let near_bit = 1u32 << (nearest - b'a');
+                if (mask & rep_bit) != 0 && (mask & near_bit) == 0 {
+                    let (cx, cy) = self.key_layout.center_of(reported_lower);
+                    let (dx, dy) = self.user.touch_profile.offset_for(reported_lower);
+                    let d2 = (nx - (cx + dx)).powi(2) + (ny - (cy + dy)).powi(2);
+                    if d2 <= 0.66 * 0.66 {
+                        reported_lower
+                    } else {
+                        nearest
+                    }
+                } else {
+                    nearest
+                }
+            } else {
+                nearest
+            }
         } else {
-            reported_ch.to_ascii_lowercase()
+            reported_lower
         };
         let obs = KeyObs::touch(adapted_ch, nx, ny, timestamp_ms);
         self.push_code_observation(obs)

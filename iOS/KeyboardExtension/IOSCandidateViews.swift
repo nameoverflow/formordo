@@ -1,19 +1,52 @@
 #if os(iOS)
 import UIKit
 
-/// iOS 26 Native Airy Unboxed Candidate Bar (`52pt` height):
-/// - Zero pill boxes around candidates: clean `18pt` PingFang SC Regular text with `22pt` spacing
-/// - When idle (`preedit.isEmpty`), displays high-frequency starter words just like Apple native Wubi,
-///   with a thin right-hand vertical hairline and `⌄` chevron
+/// Reusable candidate button with subtle native rounded-pill highlight on touch-down.
+@MainActor
+private final class IOSRibbonSlotButton: UIButton {
+    var slotIndex: Int = 0
+    var starterWord: String?
+
+    override var isHighlighted: Bool {
+        didSet {
+            backgroundColor = isHighlighted
+                ? UIColor.label.withAlphaComponent(0.10)
+                : .clear
+        }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        layer.cornerRadius = 7.0
+        layer.cornerCurve = .continuous
+        var cfg = UIButton.Configuration.plain()
+        cfg.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 6, bottom: 5, trailing: 6)
+        cfg.background.backgroundColor = .clear
+        self.configuration = cfg
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+/// iOS 26 Native Airy Unboxed Candidate Bar (`44pt` height) with zero-allocation slot pooling:
+/// - Zero view destruction/recreation during 120Hz typing bursts
+/// - Clean `18pt` SF/PingFang text with tactile press highlight
 final class IOSCandidateRibbonView: UIView {
     var onSelectCandidate: ((Int) -> Void)?
     var onSelectStarterWord: ((String) -> Void)?
     var onTapChevron: (() -> Void)?
 
     private let scrollView = UIScrollView()
+    private let scrollMaskContainer = UIView()
+    private let edgeFadeMask = CAGradientLayer()
     private let stackView = UIStackView()
     private let divider = UIView()
     private let chevronBtn = UIButton(type: .system)
+    private var slotButtons: [IOSRibbonSlotButton] = []
+    private var scrollTrailingToDivider: NSLayoutConstraint!
+    private var scrollTrailingToFull: NSLayoutConstraint!
 
     private static let starterWords = ["我", "我们", "不是", "怎么", "你", "在", "这", "可以"]
 
@@ -27,14 +60,28 @@ final class IOSCandidateRibbonView: UIView {
     }
 
     private func setupViews() {
+        scrollMaskContainer.translatesAutoresizingMaskIntoConstraints = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.showsHorizontalScrollIndicator = false
+        scrollView.delaysContentTouches = false
+        scrollView.canCancelContentTouches = true
 
         stackView.translatesAutoresizingMaskIntoConstraints = false
         stackView.axis = .horizontal
-        stackView.spacing = 22
+        stackView.spacing = 12
         stackView.alignment = .center
         scrollView.addSubview(stackView)
+        scrollMaskContainer.addSubview(scrollView)
+
+        edgeFadeMask.colors = [
+            UIColor.black.cgColor,
+            UIColor.black.cgColor,
+            UIColor.clear.cgColor,
+        ]
+        edgeFadeMask.locations = [0.0, 0.92, 1.0]
+        edgeFadeMask.startPoint = CGPoint(x: 0.0, y: 0.5)
+        edgeFadeMask.endPoint = CGPoint(x: 1.0, y: 0.5)
+        scrollMaskContainer.layer.mask = edgeFadeMask
 
         divider.translatesAutoresizingMaskIntoConstraints = false
         chevronBtn.translatesAutoresizingMaskIntoConstraints = false
@@ -42,30 +89,66 @@ final class IOSCandidateRibbonView: UIView {
         chevronBtn.setImage(UIImage(systemName: "chevron.down", withConfiguration: cfg), for: .normal)
         chevronBtn.addTarget(self, action: #selector(handleChevron), for: .touchUpInside)
 
-        addSubview(scrollView)
+        addSubview(scrollMaskContainer)
         addSubview(divider)
         addSubview(chevronBtn)
 
-        NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: divider.leadingAnchor),
-            scrollView.topAnchor.constraint(equalTo: topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        scrollTrailingToDivider = scrollMaskContainer.trailingAnchor.constraint(equalTo: divider.leadingAnchor)
+        scrollTrailingToFull = scrollMaskContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8)
 
-            stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 14),
-            stackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -14),
-            stackView.centerYAnchor.constraint(equalTo: scrollView.frameLayoutGuide.centerYAnchor, constant: 2),
+        NSLayoutConstraint.activate([
+            scrollMaskContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollTrailingToFull,
+            scrollMaskContainer.topAnchor.constraint(equalTo: topAnchor),
+            scrollMaskContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            scrollView.leadingAnchor.constraint(equalTo: scrollMaskContainer.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: scrollMaskContainer.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: scrollMaskContainer.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: scrollMaskContainer.bottomAnchor),
+
+            stackView.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 12),
+            stackView.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -16),
+            stackView.centerYAnchor.constraint(equalTo: scrollView.frameLayoutGuide.centerYAnchor, constant: 1),
 
             divider.trailingAnchor.constraint(equalTo: chevronBtn.leadingAnchor),
-            divider.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 2),
-            divider.widthAnchor.constraint(equalToConstant: 0.7),
-            divider.heightAnchor.constraint(equalToConstant: 21),
+            divider.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
+            divider.widthAnchor.constraint(equalToConstant: 0.65),
+            divider.heightAnchor.constraint(equalToConstant: 20),
 
             chevronBtn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
             chevronBtn.topAnchor.constraint(equalTo: topAnchor),
             chevronBtn.bottomAnchor.constraint(equalTo: bottomAnchor),
             chevronBtn.widthAnchor.constraint(equalToConstant: 44),
         ])
+
+        ensureSlotCapacity(10)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        edgeFadeMask.frame = scrollMaskContainer.bounds
+        CATransaction.commit()
+    }
+
+    private func ensureSlotCapacity(_ count: Int) {
+        while slotButtons.count < count {
+            let btn = IOSRibbonSlotButton(type: .custom)
+            btn.addTarget(self, action: #selector(handleSlotTap(_:)), for: .touchUpInside)
+            btn.isHidden = true
+            stackView.addArrangedSubview(btn)
+            slotButtons.append(btn)
+        }
+    }
+
+    @objc private func handleSlotTap(_ sender: IOSRibbonSlotButton) {
+        if let starter = sender.starterWord {
+            onSelectStarterWord?(starter)
+        } else {
+            onSelectCandidate?(sender.slotIndex)
+        }
     }
 
     func setExpanded(_ expanded: Bool) {
@@ -76,62 +159,90 @@ final class IOSCandidateRibbonView: UIView {
         )
     }
 
-    private var lastState: WubiActionState?
-    private var lastDark = false
+    private var lastCandidates: [WubiCandidateItem]?
+    private var lastPreeditEmpty: Bool?
+    private var lastDark: Bool?
 
     func update(state: WubiActionState, dark: Bool) {
-        guard lastState != state || lastDark != dark else { return }
-        lastState = state
+        let isEmpty = state.preedit.isEmpty
+        if lastPreeditEmpty == isEmpty,
+           lastDark == dark,
+           (isEmpty || lastCandidates == state.candidates) {
+            return
+        }
+        lastPreeditEmpty = isEmpty
         lastDark = dark
+        lastCandidates = state.candidates
+
         let textCol: UIColor = dark ? .white : .black
-        let subtleCol: UIColor = dark ? UIColor(white: 0.62, alpha: 1.0) : UIColor(white: 0.45, alpha: 1.0)
+        let subtleCol: UIColor = dark ? UIColor(white: 0.64, alpha: 1.0) : UIColor(white: 0.44, alpha: 1.0)
         divider.backgroundColor = (dark ? UIColor.white : UIColor.black).withAlphaComponent(0.14)
         chevronBtn.tintColor = textCol
-        chevronBtn.isHidden = state.preedit.isEmpty
-        divider.isHidden = state.preedit.isEmpty
+        chevronBtn.isHidden = isEmpty
+        divider.isHidden = isEmpty
+        scrollTrailingToDivider.isActive = !isEmpty
+        scrollTrailingToFull.isActive = isEmpty
 
-        stackView.arrangedSubviews.forEach { $0.removeFromSuperview() }
-
-        if state.preedit.isEmpty {
-            for word in Self.starterWords {
-                let btn = UIButton(type: .system)
-                btn.setTitle(word, for: .normal)
-                btn.setTitleColor(textCol, for: .normal)
-                btn.titleLabel?.font = .systemFont(ofSize: 18, weight: .regular)
-                btn.addAction(UIAction { [weak self] _ in self?.onSelectStarterWord?(word) }, for: .touchUpInside)
-                stackView.addArrangedSubview(btn)
-            }
-        } else {
-            for (idx, item) in state.candidates.enumerated() {
-                let btn = UIButton(type: .system)
-                let attr = NSMutableAttributedString(
-                    string: item.text,
-                    attributes: [
-                        .font: UIFont.systemFont(ofSize: 18.5, weight: idx == 0 ? .medium : .regular),
-                        .foregroundColor: textCol,
-                    ]
-                )
-                // Keep native unboxed cleanliness: only append a whisper-light code hint when rescued or lookup!
-                if !item.comment.isEmpty && (item.badgeKind == .typoCorrected || item.badgeKind == .pinyinLookup || item.badgeKind == .shortcode) {
-                    let cleanHint = item.badgeKind == .typoCorrected
-                        ? item.comment.components(separatedBy: " ").first ?? item.comment
-                        : item.comment
-                    attr.append(
-                        NSAttributedString(
-                            string: " \(cleanHint)",
+        UIView.performWithoutAnimation {
+            if isEmpty {
+                let words = Self.starterWords
+                ensureSlotCapacity(words.count)
+                for (i, btn) in slotButtons.enumerated() {
+                    if i < words.count {
+                        btn.slotIndex = i
+                        btn.starterWord = words[i]
+                        let attr = NSAttributedString(
+                            string: words[i],
                             attributes: [
-                                .font: UIFont.monospacedSystemFont(ofSize: 10.5, weight: .regular),
-                                .foregroundColor: subtleCol,
+                                .font: UIFont.systemFont(ofSize: 18, weight: .regular),
+                                .foregroundColor: textCol,
                             ]
                         )
-                    )
+                        btn.configuration?.attributedTitle = AttributedString(attr)
+                        btn.isHidden = false
+                    } else {
+                        btn.isHidden = true
+                    }
                 }
-                btn.setAttributedTitle(attr, for: .normal)
-                btn.addAction(UIAction { [weak self] _ in self?.onSelectCandidate?(idx) }, for: .touchUpInside)
-                stackView.addArrangedSubview(btn)
+            } else {
+                let items = state.candidates
+                ensureSlotCapacity(items.count)
+                for (i, btn) in slotButtons.enumerated() {
+                    if i < items.count {
+                        let item = items[i]
+                        btn.slotIndex = i
+                        btn.starterWord = nil
+                        let attr = NSMutableAttributedString(
+                            string: item.text,
+                            attributes: [
+                                .font: UIFont.systemFont(ofSize: 18.5, weight: i == 0 ? .medium : .regular),
+                                .foregroundColor: textCol,
+                            ]
+                        )
+                        if !item.comment.isEmpty && (item.badgeKind == .typoCorrected || item.badgeKind == .pinyinLookup || item.badgeKind == .shortcode) {
+                            let cleanHint = item.badgeKind == .typoCorrected
+                                ? item.comment.components(separatedBy: " ").first ?? item.comment
+                                : item.comment
+                            attr.append(
+                                NSAttributedString(
+                                    string: " \(cleanHint)",
+                                    attributes: [
+                                        .font: UIFont.monospacedSystemFont(ofSize: 10.5, weight: .regular),
+                                        .foregroundColor: subtleCol,
+                                    ]
+                                )
+                            )
+                        }
+                        btn.configuration?.attributedTitle = AttributedString(attr)
+                        btn.isHidden = false
+                    } else {
+                        btn.isHidden = true
+                    }
+                }
             }
+            scrollView.setContentOffset(.zero, animated: false)
+            layoutIfNeeded()
         }
-        scrollView.setContentOffset(.zero, animated: false)
     }
 
     @objc private func handleChevron() {
@@ -139,7 +250,7 @@ final class IOSCandidateRibbonView: UIView {
     }
 }
 
-/// Full-keyboard 4-column scrollable Expanded Candidate Grid matching iOS 26 keycap aesthetic.
+/// Full-keyboard 4-column scrollable Expanded Candidate Grid matching iOS 26 continuous squircle keycap aesthetic.
 final class IOSExpandedCandidateView: UIView {
     var onSelectAbsCandidate: ((Int) -> Void)?
     var onCollapse: (() -> Void)?
@@ -205,6 +316,10 @@ final class IOSExpandedCandidateView: UIView {
             btn.backgroundColor = cellBg
             btn.tintColor = textCol
             btn.setTitleColor(textCol, for: .normal)
+            btn.layer.shadowColor = UIColor.black.cgColor
+            btn.layer.shadowOffset = CGSize(width: 0, height: 0.8)
+            btn.layer.shadowRadius = 0.6
+            btn.layer.shadowOpacity = dark ? 0.30 : 0.12
         }
 
         gridStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -222,6 +337,11 @@ final class IOSExpandedCandidateView: UIView {
                     let btn = UIButton(type: .system)
                     btn.backgroundColor = cellBg
                     btn.layer.cornerRadius = 8.5
+                    btn.layer.cornerCurve = .continuous
+                    btn.layer.shadowColor = UIColor.black.cgColor
+                    btn.layer.shadowOffset = CGSize(width: 0, height: 0.8)
+                    btn.layer.shadowRadius = 0.6
+                    btn.layer.shadowOpacity = dark ? 0.30 : 0.12
                     btn.setTitle(item.text, for: .normal)
                     btn.setTitleColor(textCol, for: .normal)
                     btn.titleLabel?.font = .systemFont(ofSize: 17, weight: .regular)
@@ -240,6 +360,7 @@ final class IOSExpandedCandidateView: UIView {
     private func makeRailButton(title: String?, symbol: String?, action: @escaping () -> Void) -> UIButton {
         let b = UIButton(type: .system)
         b.layer.cornerRadius = 8.5
+        b.layer.cornerCurve = .continuous
         if let s = symbol {
             b.setImage(UIImage(systemName: s), for: .normal)
         } else {
@@ -250,5 +371,4 @@ final class IOSExpandedCandidateView: UIView {
         return b
     }
 }
-
 #endif

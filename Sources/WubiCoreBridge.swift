@@ -85,7 +85,67 @@ public struct WubiActionState: Codable, Equatable, Sendable {
     public let notice: String
     public let userPhraseCount: Int
     public let calibratedKeyCount: Int
+    public let validNextMask: UInt32
     public let candidates: [WubiCandidateItem]
+
+    public init(
+        consumed: Bool,
+        bell: Bool,
+        asciiMode: Bool,
+        schemaId: UInt32,
+        page: Int,
+        totalPages: Int,
+        vertical: Bool,
+        schemaName: String,
+        commitText: String,
+        preedit: String,
+        notice: String,
+        userPhraseCount: Int,
+        calibratedKeyCount: Int,
+        validNextMask: UInt32 = 0x03FF_FFFF,
+        candidates: [WubiCandidateItem]
+    ) {
+        self.consumed = consumed
+        self.bell = bell
+        self.asciiMode = asciiMode
+        self.schemaId = schemaId
+        self.page = page
+        self.totalPages = totalPages
+        self.vertical = vertical
+        self.schemaName = schemaName
+        self.commitText = commitText
+        self.preedit = preedit
+        self.notice = notice
+        self.userPhraseCount = userPhraseCount
+        self.calibratedKeyCount = calibratedKeyCount
+        self.validNextMask = validNextMask
+        self.candidates = candidates
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case consumed, bell, asciiMode, schemaId, page, totalPages, vertical
+        case schemaName, commitText, preedit, notice, userPhraseCount, calibratedKeyCount
+        case validNextMask, candidates
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.consumed = try c.decode(Bool.self, forKey: .consumed)
+        self.bell = try c.decode(Bool.self, forKey: .bell)
+        self.asciiMode = try c.decode(Bool.self, forKey: .asciiMode)
+        self.schemaId = try c.decode(UInt32.self, forKey: .schemaId)
+        self.page = try c.decode(Int.self, forKey: .page)
+        self.totalPages = try c.decode(Int.self, forKey: .totalPages)
+        self.vertical = try c.decode(Bool.self, forKey: .vertical)
+        self.schemaName = try c.decode(String.self, forKey: .schemaName)
+        self.commitText = try c.decode(String.self, forKey: .commitText)
+        self.preedit = try c.decode(String.self, forKey: .preedit)
+        self.notice = try c.decode(String.self, forKey: .notice)
+        self.userPhraseCount = try c.decode(Int.self, forKey: .userPhraseCount)
+        self.calibratedKeyCount = try c.decode(Int.self, forKey: .calibratedKeyCount)
+        self.validNextMask = try c.decodeIfPresent(UInt32.self, forKey: .validNextMask) ?? 0x03FF_FFFF
+        self.candidates = try c.decode([WubiCandidateItem].self, forKey: .candidates)
+    }
 
     public static let empty = WubiActionState(
         consumed: false,
@@ -101,6 +161,7 @@ public struct WubiActionState: Codable, Equatable, Sendable {
         notice: "",
         userPhraseCount: 0,
         calibratedKeyCount: 0,
+        validNextMask: 0x03FF_FFFF,
         candidates: []
     )
 }
