@@ -4,6 +4,10 @@ CERT_NAME ?= Talus Local Code Signing
 CODESIGN_IDENTITY ?= auto
 RAW_TABLES_DIR ?= ../raw-tables
 
+export MACOSX_DEPLOYMENT_TARGET := 14.0
+MACOS_TARGET = -target arm64-apple-macosx14.0
+LSREGISTER = /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+
 CORE_LIB = Core/target/release/libwubi_core.a
 CORE_HEADER = Core/include/wubi_core.h
 CORE_FLAGS = -import-objc-header $(CORE_HEADER) $(CORE_LIB)
@@ -23,7 +27,7 @@ dicts: $(CORE_LIB)
 
 build/PrisWubi: $(APP_SOURCES) $(CORE_LIB) $(CORE_HEADER)
 	mkdir -p build
-	swiftc -O $(APP_SOURCES) $(CORE_FLAGS) $(FRAMEWORKS) -o $@
+	swiftc -O $(MACOS_TARGET) $(APP_SOURCES) $(CORE_FLAGS) $(FRAMEWORKS) -o $@
 
 build/AppIcon.icns build/menu_icon.pdf: Scripts/DrawAssets.swift
 	mkdir -p build/AppIcon.iconset
@@ -53,35 +57,37 @@ app: build/PrisWubi Resources/Info.plist build/AppIcon.icns build/menu_icon.pdf
 install: app
 	mkdir -p "$$HOME/Library/Input Methods"
 	pkill -TERM -x PrisWubi || true
-	sleep 0.4
+	sleep 0.3
 	rm -rf "$$HOME/Library/Input Methods/PrisWubi.app"
 	cp -R build/PrisWubi.app "$$HOME/Library/Input Methods/PrisWubi.app"
-	swift -e 'import Carbon; let u = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Input Methods/PrisWubi.app"); TISRegisterInputSource(u as CFURL)'
-	@echo "Installed to ~/Library/Input Methods/PrisWubi.app (enable 棱五笔 in System Settings -> Keyboard -> Input Sources)"
+	"$(LSREGISTER)" -f -R -trusted "$$HOME/Library/Input Methods/PrisWubi.app"
+	swift $(MACOS_TARGET) -e 'import Carbon; let u = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Input Methods/PrisWubi.app"); TISRegisterInputSource(u as CFURL)'
+	open -g "$$HOME/Library/Input Methods/PrisWubi.app"
+	@echo "Installed and launched ~/Library/Input Methods/PrisWubi.app"
 
 rust-test:
 	cargo test --release --manifest-path Core/Cargo.toml
 
 swift-test: $(CORE_LIB)
 	mkdir -p build
-	swiftc -O Sources/WubiCoreBridge.swift Sources/CandidatePanel.swift Tests/SwiftBridgeTests.swift $(CORE_FLAGS) -framework Cocoa -framework SwiftUI -o build/swift-bridge-tests
+	swiftc -O $(MACOS_TARGET) Sources/WubiCoreBridge.swift Sources/CandidatePanel.swift Tests/SwiftBridgeTests.swift $(CORE_FLAGS) -framework Cocoa -framework SwiftUI -o build/swift-bridge-tests
 	build/swift-bridge-tests
 
 test: rust-test swift-test ios-test
 
 ios-test: $(CORE_LIB)
 	mkdir -p build
-	swiftc -O Sources/WubiCoreBridge.swift iOS/Shared/IOSKeyboardLayoutEngine.swift Tests/IOSKeyboardTests.swift $(CORE_FLAGS) -framework Foundation -framework CoreGraphics -o build/ios-keyboard-tests
+	swiftc -O $(MACOS_TARGET) Sources/WubiCoreBridge.swift iOS/Shared/IOSKeyboardLayoutEngine.swift Tests/IOSKeyboardTests.swift $(CORE_FLAGS) -framework Foundation -framework CoreGraphics -o build/ios-keyboard-tests
 	build/ios-keyboard-tests
 
 previews: $(CORE_LIB)
 	mkdir -p build/previews
-	swiftc -O $(UI_SOURCES) Scripts/RenderPreviews.swift $(CORE_FLAGS) -framework Cocoa -framework SwiftUI -o build/render-previews
+	swiftc -O $(MACOS_TARGET) $(UI_SOURCES) Scripts/RenderPreviews.swift $(CORE_FLAGS) -framework Cocoa -framework SwiftUI -o build/render-previews
 	build/render-previews build/previews
 
 ios-previews: $(CORE_LIB)
 	mkdir -p build/ios-previews
-	swiftc -O Sources/WubiCoreBridge.swift iOS/Shared/IOSKeyboardLayoutEngine.swift iOS/HostApp/HostAppViews.swift Scripts/RenderIOSPreviews.swift $(CORE_FLAGS) -framework Cocoa -framework SwiftUI -o build/render-ios-previews
+	swiftc -O $(MACOS_TARGET) Sources/WubiCoreBridge.swift iOS/Shared/IOSKeyboardLayoutEngine.swift iOS/HostApp/HostAppViews.swift Scripts/RenderIOSPreviews.swift $(CORE_FLAGS) -framework Cocoa -framework SwiftUI -o build/render-ios-previews
 	build/render-ios-previews build/ios-previews
 
 ios-project:
