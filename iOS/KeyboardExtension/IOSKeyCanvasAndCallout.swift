@@ -543,6 +543,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
             let id = ObjectIdentifier(touch)
             guard var state = trackedTouches[id], !state.committedByRollover else { continue }
             if case .letter = state.initialKey.kind { continue }
+            if state.initialKey.kind == .backspace { continue }
             let pt = touch.location(in: self)
             state.currentPoint = pt
 

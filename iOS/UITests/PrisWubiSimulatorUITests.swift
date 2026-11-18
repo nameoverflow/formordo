@@ -80,6 +80,22 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         XCTAssertEqual(committed, "t", "The letter must reach the engine on contact")
         canvas.touchesCancelled([flick], with: nil)
         XCTAssertEqual(committed, "t", "Cancellation must not drop or duplicate a registered letter")
+
+        var releasedKeys: [IOSKeyKind] = []
+        canvas.onKeyTouchUp = { spec, _ in releasedKeys.append(spec.kind) }
+        let backspaceKey = snapshot.keys.first { $0.kind == .backspace }!
+        let deleteTouch = SyntheticFingerTouch()
+        deleteTouch.mockPoint = CGPoint(x: backspaceKey.frame.midX, y: backspaceKey.frame.midY)
+        deleteTouch.mockTimestamp = 201
+        canvas.touchesBegan([deleteTouch], with: nil)
+        deleteTouch.mockPoint = flick.mockPoint
+        deleteTouch.mockTimestamp = 201.1
+        canvas.touchesMoved([deleteTouch], with: nil)
+        flick.mockTimestamp = 201.2
+        canvas.touchesBegan([flick], with: nil)
+        canvas.touchesEnded([deleteTouch, flick], with: nil)
+        XCTAssertEqual(releasedKeys, [.backspace], "Rollover must end delete repeat without entering a stray letter")
+        XCTAssertEqual(committed, "tt")
     }
 
     @MainActor
