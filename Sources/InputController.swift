@@ -205,7 +205,7 @@ public final class PrisWubiInputController: IMKInputController {
     // MARK: - Native macOS Input Method Menu
 
     public override func menu() -> NSMenu! {
-        let m = NSMenu(title: "棱五笔")
+        let m = NSMenu(title: "形序")
         let curSchema = WubiBridge.shared.prefs.schemaId
 
         let item86 = NSMenuItem(title: "86 版五笔", action: #selector(selectSchema86(_:)), keyEquivalent: "")
@@ -245,7 +245,7 @@ public final class PrisWubiInputController: IMKInputController {
         m.addItem(.separator())
 
         let prefsItem = NSMenuItem(
-            title: "棱五笔偏好设置…",
+            title: "形序偏好设置…",
             action: #selector(showPreferences(_:)),
             keyEquivalent: ""
         )

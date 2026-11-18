@@ -5,7 +5,7 @@ final class PrisWubiSimulatorUITests: XCTestCase {
 
     @MainActor
     func testEnableKeyboardAndLiveWubiTyping() throws {
-        // 1. Add 棱五笔 in iOS 26.5 Settings -> 通用 -> 键盘 -> 键盘 -> 添加新键盘
+        // 1. Add 形序 in iOS 26.5 Settings -> 通用 -> 键盘 -> 键盘 -> 添加新键盘
         let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
         settings.launch()
 
@@ -23,7 +23,7 @@ final class PrisWubiSimulatorUITests: XCTestCase {
             kbsCell.tap()
         }
 
-        let alreadyAdded = settings.cells.containing(NSPredicate(format: "label CONTAINS '棱五笔'")).firstMatch
+        let alreadyAdded = settings.cells.containing(NSPredicate(format: "label CONTAINS '形序'")).firstMatch
         if !alreadyAdded.waitForExistence(timeout: 1.5) {
             let addBtn = settings.buttons["AddNewKeyboard"].firstMatch
             let addCell = settings.cells["AddNewKeyboard"].firstMatch
@@ -39,7 +39,7 @@ final class PrisWubiSimulatorUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.8)
             attachHierarchy(of: settings, name: "settings-add-keyboard-tree")
 
-            let prisRow = settings.staticTexts.containing(NSPredicate(format: "label CONTAINS '棱五笔'")).firstMatch
+            let prisRow = settings.staticTexts.containing(NSPredicate(format: "label CONTAINS '形序'")).firstMatch
             if prisRow.waitForExistence(timeout: 3) {
                 prisRow.tap()
                 Thread.sleep(forTimeInterval: 0.8)
@@ -61,19 +61,19 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         let inputUI = XCUIApplication(bundleIdentifier: "com.apple.InputUI")
         let globeCoord = app.coordinate(withNormalizedOffset: CGVector(dx: 0.095, dy: 0.955))
 
-        // Long-press Globe to open the Input Mode picker and select 棱五笔 directly
+        // Long-press Globe to open the Input Mode picker and select 形序 directly
         globeCoord.press(forDuration: 0.75)
         Thread.sleep(forTimeInterval: 0.6)
         attachHierarchy(of: inputUI, name: "inputui-globe-menu-tree")
 
-        let pickerInInputUI = inputUI.staticTexts.containing(NSPredicate(format: "label CONTAINS '棱五笔'")).firstMatch
-        let pickerInApp = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '棱五笔'")).firstMatch
+        let pickerInInputUI = inputUI.staticTexts.containing(NSPredicate(format: "label CONTAINS '形序'")).firstMatch
+        let pickerInApp = app.staticTexts.containing(NSPredicate(format: "label CONTAINS '形序'")).firstMatch
         if pickerInInputUI.waitForExistence(timeout: 1.5) {
             pickerInInputUI.tap()
         } else if pickerInApp.exists && pickerInApp.frame.minY > 500 {
             pickerInApp.tap()
         } else {
-            // Dismiss menu if any and cycle Globe until 棱五笔 is active
+            // Dismiss menu if any and cycle Globe until 形序 is active
             for _ in 0..<6 {
                 globeCoord.tap()
                 Thread.sleep(forTimeInterval: 0.7)

@@ -39,7 +39,7 @@ targets:
       path: HostApp/Info.plist
       properties:
         PrisWubiSettingsGroup: $(AppIdentifierPrefix)com.hcyue.priswubi.settings
-        CFBundleDisplayName: 棱五笔
+        CFBundleDisplayName: 形序
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
@@ -87,7 +87,7 @@ targets:
       path: KeyboardExtension/Info.plist
       properties:
         PrisWubiSettingsGroup: $(AppIdentifierPrefix)com.hcyue.priswubi.settings
-        CFBundleDisplayName: 棱五笔
+        CFBundleDisplayName: 形序
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         NSExtension:

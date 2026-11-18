@@ -121,7 +121,7 @@ public struct IOSHostRootView: View {
                                 .foregroundStyle(.white)
                         }
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("棱五笔 PrisWubi")
+                            Text("形序 Formordo")
                                 .font(.system(size: 20, weight: .bold))
                             Text("当前激活：\(bridge.state.schemaName) · 零拷贝 mmap 内核")
                                 .font(.system(size: 13))
@@ -157,7 +157,7 @@ public struct IOSHostRootView: View {
                         }
 
                         stepLine(num: "1", text: "进入「设置 → 通用 → 键盘 → 键盘 → 添加新键盘」")
-                        stepLine(num: "2", text: "在第三方键盘中选择「棱五笔」即可离线极速盲打")
+                        stepLine(num: "2", text: "在第三方键盘中选择「形序」即可离线极速盲打")
                         stepLine(num: "3", text: "按键振动需开启「允许完全访问」。方案和输入选项可在本 App 中设置。")
 
                         Button {
@@ -327,7 +327,7 @@ public struct IOSHostRootView: View {
                             .font(.system(size: 14, weight: .semibold))
 
                         HStack(spacing: 8) {
-                            TextField("输入新词条，如：棱五笔", text: $newWord)
+                            TextField("输入新词条，如：形序", text: $newWord)
                                 .textFieldStyle(.roundedBorder)
                             Button("添加") {
                                 let code = bridge.addUserPhrase(newWord)

@@ -41,18 +41,22 @@ public struct SettingsRootView: View {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(
                                 LinearGradient(
-                                    colors: [Color.accentColor, Color.accentColor.opacity(0.75)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
+                                    colors: [Color(red: 0.98, green: 0.97, blue: 0.94), Color(red: 0.91, green: 0.89, blue: 0.85)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
                                 )
                             )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .strokeBorder(Color.black.opacity(0.08), lineWidth: 0.5)
+                            )
                             .frame(width: 32, height: 32)
-                        Text("五")
-                            .font(.system(size: 17, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
+                        Image(systemName: "pencil.tip")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.11, green: 0.12, blue: 0.15))
                     }
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("棱五笔")
+                        Text("形序 Formordo")
                             .font(.system(size: 13.5, weight: .semibold))
                         Text(bridge.state.schemaName)
                             .font(.system(size: 11))
@@ -414,7 +418,7 @@ public struct SettingsRootView: View {
                         .font(.system(size: 13, weight: .medium))
 
                     HStack(spacing: 8) {
-                        TextField("输入 2–12 字中文词条，如：棱五笔", text: $newPhraseInput)
+                        TextField("输入 2–12 字中文词条，如：形序", text: $newPhraseInput)
                             .textFieldStyle(.roundedBorder)
                         Button("添加词条") {
                             let code = bridge.addUserPhrase(newPhraseInput)
@@ -580,7 +584,7 @@ public struct SettingsRootView: View {
             calibratedKeyCount: bridge.state.calibratedKeyCount,
             candidates: [
                 WubiCandidateItem(index: 1, text: "我们", comment: "⌖trwu 96%", badge: 2, confidence: 0.96, isExact: false),
-                WubiCandidateItem(index: 2, text: "棱五笔", comment: "", badge: 5, confidence: 0.02, isExact: true),
+                WubiCandidateItem(index: 2, text: "形序", comment: "", badge: 5, confidence: 0.02, isExact: true),
                 WubiCandidateItem(index: 3, text: "国", comment: "⚡l", badge: 1, confidence: 0.01, isExact: true),
                 WubiCandidateItem(index: 4, text: "语言", comment: "", badge: 0, confidence: 0.01, isExact: true),
             ]
@@ -831,7 +835,7 @@ public final class SettingsWindowController {
                 backing: .buffered,
                 defer: false
             )
-            win.title = "棱五笔偏好设置"
+            win.title = "形序偏好设置"
             win.toolbarStyle = .unified
             win.center()
             win.isReleasedWhenClosed = false

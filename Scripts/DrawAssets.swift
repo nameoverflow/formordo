@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 
 let args = CommandLine.arguments
 guard args.count >= 3 else {
@@ -9,7 +10,76 @@ guard args.count >= 3 else {
 let iconOut = URL(fileURLWithPath: args[1])
 let menuOut = URL(fileURLWithPath: args[2])
 
-// 1. Render 1024x1024 macOS App Icon
+func continuousSquirclePath(in rect: CGRect, radius: CGFloat) -> CGPath {
+    let p = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+    let path = CGMutablePath()
+    var points = [NSPoint](repeating: .zero, count: 3)
+    for i in 0..<p.elementCount {
+        let type = p.element(at: i, associatedPoints: &points)
+        switch type {
+        case .moveTo: path.move(to: points[0])
+        case .lineTo: path.addLine(to: points[0])
+        case .curveTo, .cubicCurveTo: path.addCurve(to: points[2], control1: points[0], control2: points[1])
+        case .quadraticCurveTo: path.addQuadCurve(to: points[1], control: points[0])
+        case .closePath: path.closeSubpath()
+        @unknown default: break
+        }
+    }
+    return path
+}
+
+func drawNibEmblem(in ctx: CGContext, rect: CGRect, primary: CGColor, accent: CGColor, isMenu: Bool) {
+    ctx.saveGState()
+    ctx.translateBy(x: rect.minX, y: rect.minY)
+    ctx.scaleBy(x: rect.width / 100.0, y: rect.height / 100.0)
+    ctx.setLineCap(.round)
+    ctx.setLineJoin(.round)
+
+    let nib = CGMutablePath()
+    nib.move(to: CGPoint(x: 50, y: 86))
+    nib.addLine(to: CGPoint(x: 78, y: 46))
+    nib.addLine(to: CGPoint(x: 68, y: 22))
+    nib.addLine(to: CGPoint(x: 32, y: 22))
+    nib.addLine(to: CGPoint(x: 22, y: 46))
+    nib.closeSubpath()
+
+    if isMenu {
+        ctx.addPath(nib)
+        ctx.setStrokeColor(primary)
+        ctx.setLineWidth(8.5)
+        ctx.strokePath()
+
+        ctx.move(to: CGPoint(x: 50, y: 84))
+        ctx.addLine(to: CGPoint(x: 50, y: 50))
+        ctx.strokePath()
+
+        ctx.setFillColor(primary)
+        ctx.fillEllipse(in: CGRect(x: 43.5, y: 39.5, width: 13, height: 13))
+    } else {
+        ctx.addPath(nib)
+        ctx.setFillColor(primary)
+        ctx.fillPath()
+
+        // Vermilion ink slit & breather eye
+        ctx.setStrokeColor(accent)
+        ctx.setLineWidth(4.5)
+        ctx.move(to: CGPoint(x: 50, y: 85))
+        ctx.addLine(to: CGPoint(x: 50, y: 51))
+        ctx.strokePath()
+
+        ctx.setFillColor(accent)
+        ctx.fillEllipse(in: CGRect(x: 43.5, y: 41.5, width: 13, height: 13))
+
+        // Base collar bar
+        ctx.setFillColor(primary)
+        ctx.addPath(continuousSquirclePath(in: CGRect(x: 30, y: 11, width: 40, height: 7), radius: 3.5))
+        ctx.fillPath()
+    }
+
+    ctx.restoreGState()
+}
+
+// 1. Render 1024x1024 macOS App Icon (素笺笔锋)
 do {
     let size = 1024
     let rep = NSBitmapImageRep(
@@ -25,44 +95,56 @@ do {
         bitsPerPixel: 0
     )!
     NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    let nsCtx = NSGraphicsContext(bitmapImageRep: rep)!
+    NSGraphicsContext.current = nsCtx
+    let ctx = nsCtx.cgContext
+    let cs = CGColorSpaceCreateDeviceRGB()
 
-    let rect = NSRect(x: 96, y: 96, width: 832, height: 832)
-    let path = NSBezierPath(roundedRect: rect, xRadius: 190, yRadius: 190)
+    let rect = CGRect(x: 96, y: 96, width: 832, height: 832)
+    let squircle = continuousSquirclePath(in: rect, radius: rect.width * 0.225)
 
-    let gradient = NSGradient(colors: [
-        NSColor(calibratedRed: 0.08, green: 0.45, blue: 0.92, alpha: 1.0),
-        NSColor(calibratedRed: 0.05, green: 0.25, blue: 0.68, alpha: 1.0),
-    ])!
-    gradient.draw(in: path, angle: -55)
+    // Subtle macOS icon drop shadow
+    ctx.saveGState()
+    ctx.setShadow(offset: CGSize(width: 0, height: -18), blur: 34, color: CGColor(gray: 0, alpha: 0.18))
+    ctx.addPath(squircle)
+    ctx.setFillColor(CGColor(gray: 0.95, alpha: 1))
+    ctx.fillPath()
+    ctx.restoreGState()
 
-    // Subtle keycap inner frame
-    let keyRect = rect.insetBy(dx: 68, dy: 68)
-    let keyPath = NSBezierPath(roundedRect: keyRect, xRadius: 136, yRadius: 136)
-    NSColor.white.withAlphaComponent(0.12).setFill()
-    keyPath.fill()
-    NSColor.white.withAlphaComponent(0.24).setStroke()
-    keyPath.lineWidth = 6
-    keyPath.stroke()
+    ctx.saveGState()
+    ctx.addPath(squircle)
+    ctx.clip()
 
-    let para = NSMutableParagraphStyle()
-    para.alignment = .center
-    let attrs: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: 450, weight: .bold),
-        .foregroundColor: NSColor.white,
-        .paragraphStyle: para,
-    ]
-    let str = NSAttributedString(string: "五", attributes: attrs)
-    let strSize = str.size()
-    let strRect = NSRect(
-        x: (1024 - strSize.width) / 2,
-        y: (1024 - strSize.height) / 2 - 14,
-        width: strSize.width,
-        height: strSize.height
+    let colors = [
+        CGColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1.0),
+        CGColor(red: 0.91, green: 0.89, blue: 0.85, alpha: 1.0),
+    ] as CFArray
+    let grad = CGGradient(colorsSpace: cs, colors: colors, locations: [0, 1])!
+    ctx.drawLinearGradient(
+        grad,
+        start: CGPoint(x: rect.midX, y: rect.maxY),
+        end: CGPoint(x: rect.midX, y: rect.minY),
+        options: []
     )
-    str.draw(in: strRect)
 
+    let glyphRect = rect.insetBy(dx: rect.width * 0.17, dy: rect.height * 0.17)
+    drawNibEmblem(
+        in: ctx,
+        rect: glyphRect,
+        primary: CGColor(red: 0.11, green: 0.12, blue: 0.15, alpha: 1.0),
+        accent: CGColor(red: 0.86, green: 0.27, blue: 0.21, alpha: 1.0),
+        isMenu: false
+    )
+
+    // Crisp inner specular rim
+    ctx.addPath(squircle)
+    ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.72))
+    ctx.setLineWidth(6.0)
+    ctx.strokePath()
+
+    ctx.restoreGState()
     NSGraphicsContext.restoreGraphicsState()
+
     let png = rep.representation(using: .png, properties: [:])!
     try png.write(to: iconOut)
 }
@@ -71,21 +153,15 @@ do {
 do {
     final class MenuIconView: NSView {
         override func draw(_ dirtyRect: NSRect) {
-            let border = NSBezierPath(roundedRect: bounds.insetBy(dx: 1.2, dy: 1.8), xRadius: 3.5, yRadius: 3.5)
-            NSColor.black.setStroke()
-            border.lineWidth = 1.3
-            border.stroke()
-
-            let para = NSMutableParagraphStyle()
-            para.alignment = .center
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 11.2, weight: .semibold),
-                .foregroundColor: NSColor.black,
-                .paragraphStyle: para,
-            ]
-            let s = NSAttributedString(string: "五", attributes: attrs)
-            let sz = s.size()
-            s.draw(in: NSRect(x: (bounds.width - sz.width) / 2, y: (bounds.height - sz.height) / 2 - 0.3, width: sz.width, height: sz.height))
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+            let inset = bounds.insetBy(dx: 2.0, dy: 2.0)
+            drawNibEmblem(
+                in: ctx,
+                rect: inset,
+                primary: NSColor.black.cgColor,
+                accent: NSColor.black.cgColor,
+                isMenu: true
+            )
         }
     }
     let v = MenuIconView(frame: NSRect(x: 0, y: 0, width: 18, height: 18))
