@@ -133,11 +133,13 @@ public final class PrisWubiInputController: IMKInputController {
         }
 
         if out.preedit.isEmpty {
-            client?.setMarkedText(
-                "",
-                selectionRange: NSRange(location: 0, length: 0),
-                replacementRange: NSRange(location: NSNotFound, length: NSNotFound)
-            )
+            if out.commitText.isEmpty {
+                client?.setMarkedText(
+                    "",
+                    selectionRange: NSRange(location: 0, length: 0),
+                    replacementRange: NSRange(location: NSNotFound, length: NSNotFound)
+                )
+            }
             CandidatePanelController.shared.hide()
         } else {
             let attr = NSAttributedString(
@@ -152,14 +154,27 @@ public final class PrisWubiInputController: IMKInputController {
                 replacementRange: NSRange(location: NSNotFound, length: NSNotFound)
             )
             let caret = queryCaretRect(client: client)
-            CandidatePanelController.shared.update(state: out, caretRect: caret)
+            CandidatePanelController.shared.update(
+                state: out,
+                caretRect: caret,
+                clientWindowLevel: client?.windowLevel()
+            )
         }
     }
 
     private func queryCaretRect(client: (any IMKTextInput & NSObjectProtocol)?) -> NSRect {
-        var lineRect = NSRect(x: 400, y: 400, width: 1, height: 20)
+        var lineRect = NSRect.zero
         if let client {
             _ = client.attributes(forCharacterIndex: 0, lineHeightRectangle: &lineRect)
+            if lineRect.origin == .zero {
+                let marked = client.markedRange()
+                if marked.location != NSNotFound {
+                    let rect = client.firstRect(forCharacterRange: marked, actualRange: nil)
+                    if rect.origin != .zero {
+                        lineRect = rect
+                    }
+                }
+            }
         }
         if lineRect.origin == .zero {
             let mouse = NSEvent.mouseLocation

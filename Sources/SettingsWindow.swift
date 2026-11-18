@@ -103,7 +103,7 @@ public struct SettingsRootView: View {
             }
             .padding(.horizontal, 10)
             .frame(width: 176)
-            .background(Color.primary.opacity(0.035))
+            .background(.ultraThinMaterial)
 
             Divider()
 
@@ -192,7 +192,7 @@ public struct SettingsRootView: View {
                     Divider()
                     toggleRow(
                         title: "全码显示简码提示",
-                        subtitle: "打全码时在候选旁标注 ⚡ 最短简码（如打 lgyi 提示 ⚡l）",
+                        subtitle: "打全码时在候选旁标注最短简码（如打 khk 在“中”旁轻提示 k）",
                         isOn: binding(\.showShortcodeHint)
                     )
                     Divider()
@@ -656,7 +656,8 @@ public struct SettingsRootView: View {
             Spacer()
             Toggle("", isOn: isOn)
                 .labelsHidden()
-                .toggleStyle(NativeAccentSwitchStyle())
+                .toggleStyle(.switch)
+                .controlSize(.small)
         }
     }
 
@@ -835,7 +836,8 @@ public final class SettingsWindowController {
             backing: .buffered,
             defer: false
         )
-        win.title = "棱五笔 (PrisWubi) 偏好设置"
+        win.title = "棱五笔偏好设置"
+        win.toolbarStyle = .unified
         win.center()
         win.isReleasedWhenClosed = false
         win.contentView = NSHostingView(rootView: SettingsRootView(bridge: .shared, initialSection: section))

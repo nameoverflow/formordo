@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+final class PreviewKeyWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var isKeyWindow: Bool { true }
+}
+
 @main
 struct RenderPreviews {
     @MainActor
@@ -114,7 +119,7 @@ struct RenderPreviews {
     ) throws {
         let appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)!
         let wrapped = root.environment(\.colorScheme, isDark ? .dark : .light)
-        let win = NSWindow(
+        let win = PreviewKeyWindow(
             contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.borderless],
             backing: .buffered,
@@ -153,6 +158,45 @@ struct RenderPreviews {
     }
 }
 
+struct InlineEditorLineMock: View {
+    let isDark: Bool
+    let committedPrefix: String
+    let markedPreedit: String
+    let candidateState: WubiActionState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 0) {
+                Text(committedPrefix)
+                    .font(.system(size: 15))
+                    .foregroundStyle(.primary)
+                Text(markedPreedit)
+                    .font(.system(size: 15))
+                    .underline(true, color: .primary.opacity(0.65))
+                    .foregroundStyle(.primary)
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(width: 1.5, height: 17)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(isDark ? Color(white: 0.14) : Color.white)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.6)
+            )
+
+            CandidateBarView(state: candidateState)
+                .padding(.leading, CGFloat(committedPrefix.count) * 15.0 + 12.0)
+                .shadow(color: .black.opacity(isDark ? 0.42 : 0.16), radius: 9, x: 0, y: 3)
+        }
+    }
+}
+
 struct CandidateShowcaseCanvas: View {
     let isDark: Bool
     let typoState: WubiActionState
@@ -163,36 +207,44 @@ struct CandidateShowcaseCanvas: View {
         ZStack(alignment: .topLeading) {
             LinearGradient(
                 colors: isDark
-                    ? [Color(red: 0.11, green: 0.13, blue: 0.18), Color(red: 0.07, green: 0.08, blue: 0.12)]
-                    : [Color(red: 0.92, green: 0.95, blue: 0.99), Color(red: 0.86, green: 0.90, blue: 0.96)],
+                    ? [Color(red: 0.12, green: 0.13, blue: 0.16), Color(red: 0.08, green: 0.09, blue: 0.11)]
+                    : [Color(red: 0.94, green: 0.95, blue: 0.97), Color(red: 0.89, green: 0.91, blue: 0.94)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
 
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("1. 触点边界滑偏 · 贝叶斯置信度纠错救回（T/Y 交界误敲 yrwu → 救回「我们」）")
+                    Text("1. 原生单行横排 · 触点/邻键纠错轻提示（行内下划线预编辑，零弹出缩放动画、绝不折行）")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
-                    CandidateBarView(state: typoState)
-                        .shadow(color: .black.opacity(isDark ? 0.45 : 0.14), radius: 10, x: 0, y: 4)
+                    InlineEditorLineMock(
+                        isDark: isDark,
+                        committedPrefix: "正在体验苹果原生风格五笔：",
+                        markedPreedit: "yrwu",
+                        candidateState: typoState
+                    )
                 }
 
                 HStack(alignment: .top, spacing: 26) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("2. 全码输入 · 最短简码提示（khk → 中 ⚡k）")
+                        Text("2. 全码输入 · 简码轻提示（khk → 中 k）")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
-                        CandidateBarView(state: shortcodeState)
-                            .shadow(color: .black.opacity(isDark ? 0.45 : 0.14), radius: 10, x: 0, y: 4)
+                        InlineEditorLineMock(
+                            isDark: isDark,
+                            committedPrefix: "中国",
+                            markedPreedit: "khk",
+                            candidateState: shortcodeState
+                        )
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("3. 竖排候选窗 · z 键拼音反查五笔码")
+                        Text("3. 竖排候选栏 · z 键拼音反查")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
                         CandidateBarView(state: verticalPinyinState)
-                            .shadow(color: .black.opacity(isDark ? 0.45 : 0.14), radius: 10, x: 0, y: 4)
+                            .shadow(color: .black.opacity(isDark ? 0.42 : 0.16), radius: 9, x: 0, y: 3)
                     }
                 }
             }

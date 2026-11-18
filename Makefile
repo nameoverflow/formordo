@@ -64,7 +64,7 @@ rust-test:
 
 swift-test: $(CORE_LIB)
 	mkdir -p build
-	swiftc -O Sources/WubiCoreBridge.swift Tests/SwiftBridgeTests.swift $(CORE_FLAGS) -framework Foundation -framework AppKit -o build/swift-bridge-tests
+	swiftc -O Sources/WubiCoreBridge.swift Sources/CandidatePanel.swift Tests/SwiftBridgeTests.swift $(CORE_FLAGS) -framework Cocoa -framework SwiftUI -o build/swift-bridge-tests
 	build/swift-bridge-tests
 
 test: rust-test swift-test ios-test

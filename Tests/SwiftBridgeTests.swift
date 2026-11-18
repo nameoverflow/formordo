@@ -52,6 +52,34 @@ struct SwiftBridgeTests {
         assert(decoded.strictShortcode == true)
         assert(abs(decoded.promoteThreshold - 0.86) < 0.005)
 
-        print("✓ All Swift <-> Rust C ABI bridge & touchscreen Bayesian typo tests passed!")
+        // 5. Verify pure AppKit NativeCandidateContentView NEVER wraps lines even across narrow->wide transitions
+        let candidateView = NativeCandidateContentView(frame: NSRect(x: 0, y: 0, width: 90, height: 30))
+        candidateView.maxAllowedWidth = 800
+        let narrowState = WubiActionState(
+            consumed: true, bell: false, asciiMode: false, schemaId: 86, page: 0, totalPages: 1, vertical: false,
+            schemaName: "86版五笔", commitText: "", preedit: "g", notice: "", userPhraseCount: 0, calibratedKeyCount: 0,
+            candidates: [WubiCandidateItem(index: 1, text: "一", comment: "", badge: 0, confidence: 1, isExact: true)]
+        )
+        candidateView.state = narrowState
+        let sz1 = candidateView.computeFittingSize()
+        assert(sz1.height == 30.0, "Expected exact 30pt single-line bar height, got \(sz1.height)")
+
+        let wideMultiPhraseState = WubiActionState(
+            consumed: true, bell: false, asciiMode: false, schemaId: 86, page: 0, totalPages: 3, vertical: false,
+            schemaName: "86版五笔", commitText: "", preedit: "khk", notice: "", userPhraseCount: 0, calibratedKeyCount: 0,
+            candidates: [
+                WubiCandidateItem(index: 1, text: "中华人民共和国", comment: "⚡k", badge: 1, confidence: 1, isExact: true),
+                WubiCandidateItem(index: 2, text: "一心一意", comment: "", badge: 0, confidence: 1, isExact: true),
+                WubiCandidateItem(index: 3, text: "实事求是", comment: "", badge: 0, confidence: 1, isExact: true),
+                WubiCandidateItem(index: 4, text: "千方百计", comment: "", badge: 0, confidence: 1, isExact: true),
+                WubiCandidateItem(index: 5, text: "自力更生", comment: "", badge: 0, confidence: 1, isExact: true),
+            ]
+        )
+        candidateView.state = wideMultiPhraseState
+        let sz2 = candidateView.computeFittingSize()
+        assert(sz2.height == 30.0, "Expected strictly single-line 30pt height without wrapping, got \(sz2.height)")
+        assert(sz2.width > sz1.width + 200.0, "Expected horizontal candidate bar to expand cleanly on single line")
+
+        print("✓ All Swift <-> Rust C ABI bridge, pure-AppKit non-wrapping candidate bar & Bayesian typo tests passed!")
     }
 }
