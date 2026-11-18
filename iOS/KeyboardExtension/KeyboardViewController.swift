@@ -17,7 +17,12 @@ public final class KeyboardViewController: UIInputViewController {
     private var backspaceTimer: Timer?
     private var backspaceHoldTicks: Int = 0
     private var lastLayout: (IOSKeyboardLayoutEngine, CGSize)?
-    private let lightHaptic = UIImpactFeedbackGenerator(style: .light)
+    private var planeBeforePress: IOSKeyPlane = .letters
+    private var markedCode = ""
+    private lazy var lightHaptic: UIImpactFeedbackGenerator = {
+        if #available(iOS 17.5, *) { return UIImpactFeedbackGenerator(style: .light, view: keyCanvas) }
+        return UIImpactFeedbackGenerator(style: .light)
+    }()
     private let selectionHaptic = UISelectionFeedbackGenerator()
 
     public override func viewDidLoad() {
@@ -28,7 +33,7 @@ public final class KeyboardViewController: UIInputViewController {
 
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        if hasFullAccess { lightHaptic.prepare() }
+        lightHaptic.prepare()
         bridge.loadConfigAndUser()
         syncEngineToUI()
     }
@@ -37,6 +42,7 @@ public final class KeyboardViewController: UIInputViewController {
         super.viewWillDisappear(animated)
         stopBackspaceRepeat()
         saveUserDataTimer?.invalidate()
+        cancelMarkedCode()
         bridge.clearComposition()
         bridge.flushUserDataIfNeeded()
     }
@@ -119,16 +125,20 @@ public final class KeyboardViewController: UIInputViewController {
         keyCanvas.onKeyTouchDown = { [weak self] spec in
             guard let self else { return }
             UIDevice.current.playInputClick()
-            if self.hasFullAccess {
-                self.lightHaptic.impactOccurred(intensity: 0.24)
-                self.lightHaptic.prepare()
-            }
+            self.lightHaptic.impactOccurred()
+            self.lightHaptic.prepare()
             switch spec.kind {
             case .letter:
                 if !self.layoutEngine.isTrackpadActive {
                     let frameInRoot = self.keyCanvas.convert(spec.frame, to: self.inputView)
                     self.calloutView.present(label: spec.primaryLabel, over: frameInRoot, dark: self.isDarkAppearance)
                 }
+            case .planeSwitch(let plane, _):
+                self.calloutView.isHidden = true
+                self.planeBeforePress = self.layoutEngine.plane
+                self.commitPendingFirstIfComposing()
+                self.layoutEngine.switchPlane(plane)
+                self.syncEngineToUI()
             case .backspace:
                 self.calloutView.isHidden = true
                 self.performBackspace()
@@ -136,6 +146,12 @@ public final class KeyboardViewController: UIInputViewController {
             default:
                 self.calloutView.isHidden = true
             }
+        }
+
+        keyCanvas.onRestorePlane = { [weak self] in
+            guard let self else { return }
+            self.layoutEngine.switchPlane(self.planeBeforePress)
+            self.refreshKeyboardLayout()
         }
 
         keyCanvas.onKeyTouchCancel = { [weak self] in
@@ -154,7 +170,9 @@ public final class KeyboardViewController: UIInputViewController {
             guard let self else { return }
             self.calloutView.isHidden = true
             self.layoutEngine.isTrackpadActive = active
-            if active && self.hasFullAccess {
+            if active {
+                self.commitPendingFirstIfComposing()
+                self.syncEngineToUI()
                 self.selectionHaptic.selectionChanged()
             }
             self.refreshKeyboardLayout()
@@ -166,9 +184,7 @@ public final class KeyboardViewController: UIInputViewController {
                 return
             }
             self.textDocumentProxy.adjustTextPosition(byCharacterOffset: delta)
-            if self.hasFullAccess {
-                self.selectionHaptic.selectionChanged()
-            }
+            self.selectionHaptic.selectionChanged()
         }
 
         ribbonView.onSelectCandidate = { [weak self] relIdx in
@@ -227,6 +243,7 @@ public final class KeyboardViewController: UIInputViewController {
         }
 
         expandedGrid.onClear = { [weak self] in
+            self?.cancelMarkedCode()
             self?.bridge.clearComposition()
             self?.expandedGrid.isHidden = true
             self?.keyCanvas.isHidden = false
@@ -260,6 +277,7 @@ public final class KeyboardViewController: UIInputViewController {
         case .symbol(let sym):
             commitPendingFirstIfComposing()
             textDocumentProxy.insertText(sym)
+            if !sym.allSatisfy(\.isNumber) { layoutEngine.switchPlane(.letters) }
             syncEngineToUI()
 
         case .shift:
@@ -310,6 +328,7 @@ public final class KeyboardViewController: UIInputViewController {
         } else {
             textDocumentProxy.insertText(bridge.state.preedit)
         }
+        markedCode = ""
         bridge.clearComposition()
     }
 
@@ -343,13 +362,28 @@ public final class KeyboardViewController: UIInputViewController {
         backspaceHoldTicks = 0
     }
 
+    private func cancelMarkedCode() {
+        guard !markedCode.isEmpty else { return }
+        textDocumentProxy.setMarkedText("", selectedRange: NSRange(location: 0, length: 0))
+        textDocumentProxy.unmarkText()
+        markedCode = ""
+    }
+
     private func applyEngineState(_ out: WubiActionState) {
         if !out.commitText.isEmpty {
+            // insertText replaces the current marked range in a single editor operation.
             textDocumentProxy.insertText(out.commitText)
+            markedCode = ""
             saveUserDataTimer?.invalidate()
             saveUserDataTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated { self?.bridge.flushUserDataIfNeeded() }
             }
+        }
+        if out.preedit.isEmpty {
+            cancelMarkedCode()
+        } else if out.preedit != markedCode {
+            textDocumentProxy.setMarkedText(out.preedit, selectedRange: NSRange(location: out.preedit.utf16.count, length: 0))
+            markedCode = out.preedit
         }
         if out.preedit.isEmpty && !expandedGrid.isHidden {
             expandedGrid.isHidden = true

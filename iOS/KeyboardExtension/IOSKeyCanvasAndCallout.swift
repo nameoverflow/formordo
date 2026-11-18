@@ -9,18 +9,29 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     var onKeyTouchUp: ((IOSKeySpec, CGPoint) -> Void)?
     var onKeyTouchCancel: (() -> Void)?
     var onTrackpadStateChanged: ((Bool) -> Void)?
+    var onRestorePlane: (() -> Void)?
     var onTrackpadStep: ((Int) -> Void)?
 
     private var snapshot: IOSKeyboardLayoutEngine.LayoutSnapshot?
     private var activeTouch: UITouch?
-    private var activeKeyId: String?
+    private var activeKeyId: String? {
+        didSet {
+            guard oldValue != activeKeyId, let snapshot else { return }
+            for key in snapshot.keys where key.id == oldValue || key.id == activeKeyId {
+                setNeedsDisplay(key.frame.insetBy(dx: -2, dy: -2))
+            }
+        }
+    }
     private var touchStartPoint: CGPoint = .zero
+    private var planeKeyId: String?
+    private var spaceHoldTimer: Timer?
     private var touchStartedOnSpace: Bool = false
     private var trackpad = SpaceTrackpadAccumulator()
     private var isDark: Bool = false
 
     init() {
         super.init(frame: .zero, inputViewStyle: .keyboard)
+        clearsContextBeforeDrawing = true
         isMultipleTouchEnabled = true
         backgroundColor = .clear
     }
@@ -30,6 +41,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     }
 
     func applyTheme(dark: Bool) {
+        guard isDark != dark else { return }
         isDark = dark
         setNeedsDisplay()
     }
@@ -56,7 +68,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
             : UIColor(red: 0.64, green: 0.65, blue: 0.67, alpha: 1.0)
         let corner = IOSKeyboardLayoutEngine.keyCornerRadius
 
-        for spec in snap.keys {
+        for spec in snap.keys where rect.intersects(spec.frame.insetBy(dx: -2, dy: -2)) {
             let isPressed = (spec.id == activeKeyId)
             let fill: UIColor
             if spec.isBlueAccent {
@@ -155,8 +167,21 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
             activeTouch = touch
             touchStartPoint = point
             activeKeyId = hit.id
+            if case .planeSwitch = hit.kind { planeKeyId = hit.id }
             touchStartedOnSpace = hit.kind == .space
-            setNeedsDisplay()
+            if touchStartedOnSpace {
+                let timer = Timer(timeInterval: 0.32, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, let touch = self.activeTouch, self.touchStartedOnSpace else { return }
+                        self.trackpad.begin(at: touch.location(in: self).x)
+                        self.activeKeyId = nil
+                        self.onTrackpadStateChanged?(true)
+                        self.setNeedsDisplay()
+                    }
+                }
+                spaceHoldTimer = timer
+                RunLoop.main.add(timer, forMode: .common)
+            }
             onKeyTouchDown?(hit)
         }
     }
@@ -164,12 +189,13 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let activeTouch, touches.contains(activeTouch), let snap = snapshot else { return }
         let pt = activeTouch.location(in: self)
+        if planeKeyId != nil {
+            activeKeyId = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap)?.id
+            return
+        }
         if touchStartedOnSpace {
-            if !trackpad.isActive && abs(pt.x - touchStartPoint.x) >= 10.0 {
-                trackpad.begin(at: pt.x)
-                activeKeyId = nil
-                onTrackpadStateChanged?(true)
-                setNeedsDisplay()
+            if !trackpad.isActive && hypot(pt.x - touchStartPoint.x, pt.y - touchStartPoint.y) > 12 {
+                spaceHoldTimer?.invalidate()
             }
             if trackpad.isActive {
                 let step = trackpad.update(x: pt.x)
@@ -183,7 +209,6 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         if let hit = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap), hit.id != activeKeyId {
             onKeyTouchCancel?()
             activeKeyId = hit.id
-            setNeedsDisplay()
             if case .letter = hit.kind {
                 onKeyTouchDown?(hit)
             }
@@ -197,7 +222,9 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
 
     private func finishTouch(_ touch: UITouch) {
         let pt = touch.location(in: self)
+        spaceHoldTimer?.invalidate()
         defer {
+            planeKeyId = nil
             activeTouch = nil
             activeKeyId = nil
             touchStartedOnSpace = false
@@ -205,12 +232,22 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 trackpad.end()
                 onTrackpadStateChanged?(false)
             }
-            setNeedsDisplay()
         }
         guard !trackpad.isActive,
               let snap = snapshot,
               let hit = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap) else {
+            if planeKeyId != nil { onRestorePlane?() }
             onKeyTouchCancel?()
+            return
+        }
+        if let planeKeyId {
+            if hit.id == planeKeyId { return }
+            guard case .symbol(let symbol) = hit.kind else {
+                onRestorePlane?()
+                return
+            }
+            onKeyTouchUp?(hit, pt)
+            if symbol.allSatisfy(\.isNumber) { onRestorePlane?() }
             return
         }
         onKeyTouchUp?(hit, pt)
@@ -218,6 +255,9 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let activeTouch, touches.contains(activeTouch) else { return }
+        spaceHoldTimer?.invalidate()
+        if planeKeyId != nil { onRestorePlane?() }
+        planeKeyId = nil
         self.activeTouch = nil
         activeKeyId = nil
         touchStartedOnSpace = false
@@ -273,18 +313,18 @@ final class IOSKeyCalloutView: UIView {
 
     func present(label: String, over keyFrameInSuperview: CGRect, dark: Bool) {
         dismissTimer?.invalidate()
-        let bubbleW = max(61.33, keyFrameInSuperview.width * 1.67)
-        let bubbleH = max(65.0, keyFrameInSuperview.height * 1.44)
+        let gap: CGFloat = 5
+        let preferredHeight = max(65, keyFrameInSuperview.height * 1.44)
+        let bubbleH = min(preferredHeight, keyFrameInSuperview.minY - gap - 2)
+        let bubbleW = max(61.33, keyFrameInSuperview.width * 1.67) * bubbleH / preferredHeight
+        glyphLabel.font = .systemFont(ofSize: 36.5 * bubbleH / preferredHeight)
         let superW = superview?.bounds.width ?? 440
 
         let clampedX = min(
             max(4.0, keyFrameInSuperview.midX - bubbleW * 0.5),
             max(4.0, superW - bubbleW - 4.0)
         )
-        // Hover 3.67pt above keyFrame.minY; if superview clips top edge (Row 0), clamp softly to 1.5pt
-        let rawY = keyFrameInSuperview.minY - 3.67 - bubbleH
-        let finalY = max(2, rawY)
-
+        let finalY = keyFrameInSuperview.minY - gap - bubbleH
         frame = CGRect(x: clampedX, y: finalY, width: bubbleW, height: bubbleH)
         cardView.frame = bounds
         cardView.backgroundColor = dark

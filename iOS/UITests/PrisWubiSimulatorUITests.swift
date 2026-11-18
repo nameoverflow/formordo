@@ -154,9 +154,10 @@ final class PrisWubiSimulatorUITests: XCTestCase {
             }
         }
         let field = app.textFields.firstMatch
-        XCTAssertEqual(field.value as? String, "我们我们手感怎么")
+        XCTAssertEqual(field.value as? String, "我们我们手感怎么s")
         attachShot(name: "continuous-input")
         tapNorm(app, dx: 0.935, dy: 0.837) // discard pending s
+        XCTAssertEqual(field.value as? String, "我们我们手感怎么")
 
         // 6. Tap `k-h-k` (`中 ⚡k`) so Simulator ends with live Wubi candidates & short-code hint on screen
         tapNorm(app, dx: 0.795, dy: 0.778) // k
@@ -169,7 +170,7 @@ final class PrisWubiSimulatorUITests: XCTestCase {
 
         let tf = app.textFields.firstMatch
         let val = (tf.value as? String) ?? ""
-        XCTAssertEqual(val, "我们我们手感怎么", "Pending khk must stay in the keyboard")
+        XCTAssertEqual(val, "我们我们手感怎么khk")
 
         // Change an option in the host, then open the keyboard in a fresh session.
         app.launchArguments = []
@@ -193,6 +194,22 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         XCTAssertNotEqual(app.textFields.firstMatch.value as? String, "我们")
         tapNorm(app, dx: 0.500, dy: 0.895)
         XCTAssertEqual(app.textFields.firstMatch.value as? String, "我们")
+
+        let space = app.coordinate(withNormalizedOffset: CGVector(dx: 0.50, dy: 0.895))
+        let left = app.coordinate(withNormalizedOffset: CGVector(dx: 0.478, dy: 0.895))
+        space.press(forDuration: 0.6, thenDragTo: left)
+        tapNorm(app, dx: 0.06, dy: 0.895) // 123
+        tapNorm(app, dx: 0.21, dy: 0.837) // full stop
+        XCTAssertEqual(app.textFields.firstMatch.value as? String, "我。们")
+        tapNorm(app, dx: 0.450, dy: 0.720) // back on letters
+        XCTAssertEqual(app.textFields.firstMatch.value as? String, "我。t们")
+        tapNorm(app, dx: 0.935, dy: 0.837) // erase marked t
+        let numbers = app.coordinate(withNormalizedOffset: CGVector(dx: 0.06, dy: 0.895))
+        let five = app.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.720))
+        numbers.press(forDuration: 0.4, thenDragTo: five)
+        XCTAssertEqual(app.textFields.firstMatch.value as? String, "我。5们")
+        five.tap()
+        XCTAssertEqual(app.textFields.firstMatch.value as? String, "我。5t们")
 
     }
 

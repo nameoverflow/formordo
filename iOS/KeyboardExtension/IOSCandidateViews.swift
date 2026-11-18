@@ -76,7 +76,13 @@ final class IOSCandidateRibbonView: UIView {
         )
     }
 
+    private var lastState: WubiActionState?
+    private var lastDark = false
+
     func update(state: WubiActionState, dark: Bool) {
+        guard lastState != state || lastDark != dark else { return }
+        lastState = state
+        lastDark = dark
         let textCol: UIColor = dark ? .white : .black
         let subtleCol: UIColor = dark ? UIColor(white: 0.62, alpha: 1.0) : UIColor(white: 0.45, alpha: 1.0)
         divider.backgroundColor = (dark ? UIColor.white : UIColor.black).withAlphaComponent(0.14)
@@ -96,13 +102,6 @@ final class IOSCandidateRibbonView: UIView {
                 stackView.addArrangedSubview(btn)
             }
         } else {
-            // Keep pending codes inside the keyboard. Some host editors commit marked
-            // text during rapid replacements, leaking the next word's first letter.
-            let code = UILabel()
-            code.text = state.preedit
-            code.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
-            code.textColor = subtleCol
-            stackView.addArrangedSubview(code)
             for (idx, item) in state.candidates.enumerated() {
                 let btn = UIButton(type: .system)
                 let attr = NSMutableAttributedString(

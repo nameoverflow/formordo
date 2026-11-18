@@ -158,7 +158,7 @@ public struct IOSHostRootView: View {
 
                         stepLine(num: "1", text: "进入「设置 → 通用 → 键盘 → 键盘 → 添加新键盘」")
                         stepLine(num: "2", text: "在第三方键盘中选择「形序」即可离线极速盲打")
-                        stepLine(num: "3", text: "按键振动需开启「允许完全访问」。方案和输入选项可在本 App 中设置。")
+                        stepLine(num: "3", text: "在本 App 的「输入设置」中选择五笔方案和上屏方式。")
 
                         Button {
                             openSystemKeyboardSettings()
