@@ -62,6 +62,8 @@ install: app
 	cp -R build/PrisWubi.app "$$HOME/Library/Input Methods/PrisWubi.app"
 	"$(LSREGISTER)" -f -R -trusted "$$HOME/Library/Input Methods/PrisWubi.app"
 	swift $(MACOS_TARGET) -e 'import Carbon; let u = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Input Methods/PrisWubi.app"); TISRegisterInputSource(u as CFURL)'
+	killall imklaunchagent 2>/dev/null || true
+	sleep 0.3
 	open -g "$$HOME/Library/Input Methods/PrisWubi.app"
 	@echo "Installed and launched ~/Library/Input Methods/PrisWubi.app"
 

@@ -33,7 +33,7 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>InputMethodConnectionName</key>
-    <string>PrisWubi_Connection</string>
+    <string>com.priswubi.inputmethod.PrisWubi.Connection</string>
     <key>InputMethodServerControllerClass</key>
     <string>PrisWubiInputController</string>
     <key>InputMethodServerDelegateClass</key>

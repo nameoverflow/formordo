@@ -5,12 +5,23 @@ final class PrisWubiAppDelegate: NSObject, NSApplicationDelegate {
     private var imkServer: IMKServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let bundleId = Bundle.main.bundleIdentifier ?? "com.priswubi.inputmethod.PrisWubi"
-        let connName = (Bundle.main.infoDictionary?["InputMethodConnectionName"] as? String)
-            ?? "PrisWubi_Connection"
+        let bundle = Bundle.main
+        let bundleId = bundle.bundleIdentifier ?? "com.priswubi.inputmethod.PrisWubi"
 
-        // Start InputMethodKit Mach server when running inside an IME bundle
-        self.imkServer = IMKServer(name: connName, bundleIdentifier: bundleId)
+        // On macOS 27+, `+[IMKServer connectionNameFor:]` enforces `<bundleIdentifier>.Connection`
+        // for all third-party input methods (rejecting custom names in IMKInputSession_Modern).
+        let connSel = NSSelectorFromString("connectionNameFor:")
+        let resolvedConnName: String
+        if IMKServer.responds(to: connSel),
+           let obj = IMKServer.perform(connSel, with: bundle)?.takeUnretainedValue() as? String,
+           !obj.isEmpty {
+            resolvedConnName = obj
+        } else {
+            resolvedConnName = (bundle.infoDictionary?["InputMethodConnectionName"] as? String)
+                ?? "\(bundleId).Connection"
+        }
+
+        self.imkServer = IMKServer(name: resolvedConnName, bundleIdentifier: bundleId)
 
         // Initialize shared Rust mmap core eagerly (< 1ms) so first keystroke has 0ms cold latency
         _ = WubiBridge.shared
