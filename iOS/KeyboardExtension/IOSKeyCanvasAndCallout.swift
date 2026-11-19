@@ -406,7 +406,9 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     init() {
         super.init(frame: .zero, inputViewStyle: .keyboard)
         isMultipleTouchEnabled = true
-        backgroundColor = .clear
+        // A fully transparent gutter can be skipped during cross-process hit testing,
+        // before a touch reaches this canvas. Give the whole key area a faint backing.
+        backgroundColor = UIColor.systemBackground.withAlphaComponent(0.02)
         clipsToBounds = false
     }
 

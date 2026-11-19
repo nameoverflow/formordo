@@ -175,7 +175,14 @@ final class PrisWubiSimulatorUITests: XCTestCase {
     }
 
     @MainActor
-    func testEnableKeyboardAndLiveWubiTyping() throws {
+    private func openLiveKeyboard() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["--autofocus"]
+        app.launch()
+        if app.otherElements["PrisWubiKeyCanvas"].waitForExistence(timeout: 3) {
+            return app
+        }
+
         // 1. Add 形序 in iOS 26.5 Settings -> 通用 -> 键盘 -> 键盘 -> 添加新键盘
         let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
         settings.launch()
@@ -224,8 +231,6 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         attachShot(name: "01-settings-keyboards-added")
 
         // 2. Launch PrisWubiApp and focus the sandbox text field
-        let app = XCUIApplication()
-        app.launchArguments = ["--autofocus"]
         app.launch()
         Thread.sleep(forTimeInterval: 1.2)
 
@@ -256,6 +261,39 @@ final class PrisWubiSimulatorUITests: XCTestCase {
 
         Thread.sleep(forTimeInterval: 1.0)
         attachHierarchy(of: inputUI, name: "inputui-active-keyboard-tree")
+        return app
+    }
+
+    @MainActor
+    func testFourthCodeInLetterGutter() throws {
+        let app = openLiveKeyboard()
+        let canvas = app.otherElements["PrisWubiKeyCanvas"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        let origin = canvas.coordinate(withNormalizedOffset: .zero)
+        let layout = IOSKeyboardLayoutEngine().computeLayout(in: canvas.frame.size)
+        func frame(_ letter: Character) throws -> CGRect {
+            try XCTUnwrap(layout.keys.first { $0.primaryLabel == String(letter) }).frame
+        }
+        func tap(_ x: CGFloat, _ y: CGFloat) {
+            origin.withOffset(CGVector(dx: x, dy: y)).tap()
+        }
+
+        for letter in "skc" {
+            let key = try frame(letter)
+            tap(key.midX, key.midY)
+        }
+        let field = app.textFields.firstMatch
+        XCTAssertEqual(field.value as? String, "skc")
+
+        let e = try frame("e")
+        let r = try frame("r")
+        tap((e.maxX + r.minX) / 2, e.midY)
+        XCTAssertEqual(field.value as? String, "可能")
+    }
+
+    @MainActor
+    func testEnableKeyboardAndLiveWubiTyping() throws {
+        let app = openLiveKeyboard()
         attachShot(name: "02-live-priswubi-idle")
 
         // Measure exact keyboard position on 440x956pt iPhone 17 Pro Max (`heightConstraint = 263pt`):
