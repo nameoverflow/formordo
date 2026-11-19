@@ -581,3 +581,53 @@ pub extern "C" fn wubi_engine_state_json(handle: *const WubiEngineHandle) -> *mu
     };
     into_c_string(serialize_action_and_state(&h.inner, None))
 }
+
+#[no_mangle]
+pub extern "C" fn wubi_engine_set_context(
+    handle: *mut WubiEngineHandle,
+    context_utf8: *const c_char,
+) {
+    let Some(h) = (unsafe { handle.as_mut() }) else {
+        return;
+    };
+    if let Some(ctx) = cstr_to_str(context_utf8) {
+        h.inner.set_recent_context(ctx);
+    } else {
+        h.inner.clear_context();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wubi_engine_accept_prediction(
+    handle: *mut WubiEngineHandle,
+    text_utf8: *const c_char,
+    timestamp_ms: u64,
+) {
+    let Some(h) = (unsafe { handle.as_mut() }) else {
+        return;
+    };
+    if let Some(txt) = cstr_to_str(text_utf8) {
+        h.inner.accept_prediction(txt, timestamp_ms);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wubi_engine_predict_next_json(
+    handle: *const WubiEngineHandle,
+    max_count: u32,
+) -> *mut c_char {
+    let Some(h) = (unsafe { handle.as_ref() }) else {
+        return into_c_string("[]".to_string());
+    };
+    let preds = h.inner.predict_next_words(max_count as usize);
+    let mut j = String::with_capacity(128);
+    j.push('[');
+    for (idx, w) in preds.iter().enumerate() {
+        if idx > 0 {
+            j.push(',');
+        }
+        json_escape(w, &mut j);
+    }
+    j.push(']');
+    into_c_string(j)
+}

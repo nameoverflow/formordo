@@ -506,21 +506,29 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     }
 
     private var lastCandidates: [WubiCandidateItem]?
+    private var lastIdleWords: [String]?
     private var lastPreeditEmpty: Bool?
     private var lastDark: Bool?
 
-    func update(state: WubiActionState, dark: Bool, clipboardSuggestion: IOSClipboardSuggestion? = nil) {
+    func update(
+        state: WubiActionState,
+        dark: Bool,
+        clipboardSuggestion: IOSClipboardSuggestion? = nil,
+        idleWords: [String]? = nil
+    ) {
         let isEmpty = state.preedit.isEmpty
         let effectiveClipboard = isEmpty ? clipboardSuggestion : nil
+        let resolvedIdleWords = idleWords ?? Self.starterWords
         if lastPreeditEmpty == isEmpty,
            lastDark == dark,
            activeClipboardSuggestion == effectiveClipboard,
-           (isEmpty || lastCandidates == state.candidates) {
+           (isEmpty ? lastIdleWords == resolvedIdleWords : lastCandidates == state.candidates) {
             return
         }
         lastPreeditEmpty = isEmpty
         lastDark = dark
         lastCandidates = state.candidates
+        lastIdleWords = isEmpty ? resolvedIdleWords : nil
         activeClipboardSuggestion = effectiveClipboard
 
         let textCol: UIColor = dark ? .white : .black
@@ -546,7 +554,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
                 lastClipboardCompactLayout = nil
 
                 if isEmpty {
-                    let words = Self.starterWords
+                    let words = resolvedIdleWords
                     ensureSlotCapacity(words.count)
                     for (i, ctrl) in slotControls.enumerated() {
                         if i < words.count {

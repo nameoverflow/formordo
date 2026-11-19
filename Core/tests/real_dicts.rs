@@ -97,4 +97,50 @@ fn real_dicts_latency_schemas_and_typo_correction() {
     engine.set_schema(WubiSchema::Wubi06);
     let _ = engine.handle_key_event(0, Some('q'), false, 600);
     assert_eq!(engine.page_candidates()[0].text, "我");
+    engine.clear_composition();
+
+    // Test lightweight N-gram idle next-word prediction & latency
+    engine.set_schema(WubiSchema::Wubi86);
+    let samples = [
+        "",
+        "我",
+        "我们",
+        "今天",
+        "这个",
+        "不知",
+        "小红",
+        "大模",
+        "没问",
+        "真的",
+        "为什么",
+        "但是",
+        "如果",
+        "现在",
+        "输入",
+        "情绪",
+        "性价",
+        "绷不",
+        "最近",
+        "可以",
+    ];
+    let pt0 = Instant::now();
+    for s in samples {
+        engine.set_recent_context(s);
+        let preds = engine.predict_next_words(8);
+        println!("Predict after {:<6} -> {:?}", s, preds);
+        assert_eq!(preds.len(), 8);
+    }
+    let avg_pred_us = pt0.elapsed().as_secs_f64() * 1e6 / (samples.len() as f64);
+    println!("Average idle next-word prediction latency: {:.2} us", avg_pred_us);
+    assert!(avg_pred_us < 1500.0, "prediction latency too high: {:.2} us", avg_pred_us);
+
+    // Verify specific high-confidence completions
+    engine.set_recent_context("不知");
+    assert!(engine.predict_next_words(8).iter().take(3).any(|w| w == "道"));
+    engine.set_recent_context("小红");
+    assert!(engine.predict_next_words(8).iter().take(3).any(|w| w == "书"));
+    engine.set_recent_context("大模");
+    assert!(engine.predict_next_words(8).iter().take(3).any(|w| w == "型"));
+    engine.set_recent_context("输入");
+    assert!(engine.predict_next_words(8).iter().take(4).any(|w| w == "法"));
 }

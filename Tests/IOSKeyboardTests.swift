@@ -287,6 +287,29 @@ struct IOSKeyboardTests {
         let afterDenied = clipStore.lookup(hasFullAccess: true, enabled: true, hasStrings: true, changeCount: 12, prefersOTP: false, now: 1405)
         assert(afterDenied == .none, "Denied pasteboard read must not re-prompt for same changeCount")
 
-        print("✓ All iOS 26 native grid, lowercase/shift, trackpad, ergonomic Y-bias, dynamic next-key & clipboard tests passed!")
+        // 14. Idle next-word / next-char prediction via existing WBAUX002 N-gram FFI
+        bridge.setContext("")
+        let starters = bridge.predictNextWords(maxCount: 8)
+        assert(starters.count == 8 && starters.first == "我")
+
+        bridge.setContext("小红")
+        let xhsPreds = bridge.predictNextWords(maxCount: 8)
+        assert(xhsPreds.first == "书", "Expected '书' after '小红', got \(xhsPreds)")
+
+        bridge.setContext("情绪")
+        let moodPreds = bridge.predictNextWords(maxCount: 8)
+        assert(moodPreds.prefix(3).contains("价值"), "Expected '价值' after '情绪', got \(moodPreds)")
+
+        // Chained prediction via acceptPrediction + punctuation reset
+        bridge.setContext("大模")
+        assert(bridge.predictNextWords(maxCount: 8).first == "型")
+        bridge.acceptPrediction("型", timestampMs: 3000)
+        let afterModel = bridge.predictNextWords(maxCount: 8)
+        assert(afterModel.count == 8 && afterModel.first != "型")
+
+        bridge.setContext("大模型，")
+        assert(bridge.predictNextWords(maxCount: 8) == starters, "Punctuation must reset idle predictions to starters")
+
+        print("✓ All iOS 26 native grid, lowercase/shift, trackpad, ergonomic Y-bias, dynamic next-key, clipboard & idle N-gram prediction tests passed!")
     }
 }

@@ -380,6 +380,49 @@ impl UserStore {
         boost.min(4.5)
     }
 
+    /// Personal next-word suggestions learned from the user's own `word_bigrams`.
+    pub fn next_words_after(&self, recent_context: &[char], last_committed: &str) -> Vec<(String, f32)> {
+        if self.word_bigrams.is_empty() || (recent_context.is_empty() && last_committed.is_empty()) {
+            return Vec::new();
+        }
+        let mut keys = Vec::<String>::with_capacity(5);
+        if !last_committed.is_empty() {
+            keys.push(last_committed.to_string());
+        }
+        let n = recent_context.len();
+        for len in (1..=4.min(n)).rev() {
+            let s: String = recent_context[n - len..n].iter().collect();
+            if !keys.contains(&s) {
+                keys.push(s);
+            }
+        }
+
+        let mut scores = HashMap::<String, f32>::new();
+        for ((prev, next), &cnt) in &self.word_bigrams {
+            if next.is_empty() || cnt == 0 {
+                continue;
+            }
+            if !keys.iter().any(|k| k == prev) {
+                continue;
+            }
+            let prev_len = prev.chars().count();
+            // Require >= 2 observations for 1-char prev so one-off typos don't stick
+            if prev_len == 1 && cnt < 2 {
+                continue;
+            }
+            let len_bonus = if prev_len >= 2 { 1.4 } else { 0.0 };
+            let sc = 12.5 + ((cnt as f32) + 1.0).ln() * 1.6 + len_bonus;
+            let e = scores.entry(next.clone()).or_insert(f32::NEG_INFINITY);
+            if sc > *e {
+                *e = sc;
+            }
+        }
+        let mut out: Vec<(String, f32)> = scores.into_iter().collect();
+        out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
+        out.truncate(8);
+        out
+    }
+
     pub fn save_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
         if let Some(parent) = path.as_ref().parent() {
             fs::create_dir_all(parent)?;

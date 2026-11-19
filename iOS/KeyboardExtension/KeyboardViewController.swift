@@ -64,6 +64,7 @@ public final class KeyboardViewController: UIInputViewController {
         feedback.prepare()
         bridge.loadConfigAndUser()
         applyDesiredTrayDimensions()
+        syncContextFromProxyIfIdle()
         refreshClipboardSuggestion(allowAsyncRead: false)
         syncEngineToUI()
     }
@@ -131,6 +132,7 @@ public final class KeyboardViewController: UIInputViewController {
 
     public override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
+        syncContextFromProxyIfIdle()
         refreshClipboardSuggestion(allowAsyncRead: hasAppeared)
         syncProxyTraits()
     }
@@ -364,6 +366,8 @@ public final class KeyboardViewController: UIInputViewController {
             }
             if moved {
                 self.feedback.fireSoftStep(playClick: false)
+                self.syncContextFromProxyIfIdle()
+                self.syncEngineToUI()
             }
         }
 
@@ -380,6 +384,9 @@ public final class KeyboardViewController: UIInputViewController {
             self.keyCanvas.flushPendingTouches()
             self.feedback.fireSoftStep(playClick: true)
             self.textDocumentProxy.insertText(word)
+            self.bridge.acceptPrediction(word, timestampMs: Self.nowMs())
+            self.scheduleUserDataFlush()
+            self.syncEngineToUI()
         }
 
         ribbonView.onSelectClipboard = { [weak self] suggestion in
@@ -465,8 +472,9 @@ public final class KeyboardViewController: UIInputViewController {
                 let ch = String(UnicodeScalar(ascii))
                 let outStr = layoutEngine.shiftState.isUppercase ? ch.uppercased() : ch.lowercased()
                 textDocumentProxy.insertText(outStr)
+                bridge.setContext("")
                 layoutEngine.consumeOneShotShiftIfNeeded()
-                refreshKeyboardLayout()
+                syncEngineToUI()
             } else {
                 let out = bridge.pushTouch(
                     reportedAscii: ascii,
@@ -481,6 +489,7 @@ public final class KeyboardViewController: UIInputViewController {
         case .symbol(let sym):
             commitPendingFirstIfComposing()
             textDocumentProxy.insertText(sym)
+            bridge.setContext("")
             if IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol(sym, on: layoutEngine.plane) {
                 layoutEngine.switchPlane(.letters)
             }
@@ -512,6 +521,8 @@ public final class KeyboardViewController: UIInputViewController {
         case .space:
             if bridge.state.preedit.isEmpty {
                 textDocumentProxy.insertText(" ")
+                bridge.setContext("")
+                syncEngineToUI()
             } else {
                 let out = bridge.handleKey(keyCode: 0x31, scalar: 32, hasCmdOrCtrl: false, timestampMs: Self.nowMs())
                 applyEngineState(out)
@@ -520,6 +531,8 @@ public final class KeyboardViewController: UIInputViewController {
         case .returnKey:
             if bridge.state.preedit.isEmpty {
                 textDocumentProxy.insertText("\n")
+                bridge.setContext("")
+                syncEngineToUI()
             } else {
                 let out = bridge.handleKey(keyCode: 0x24, scalar: 13, hasCmdOrCtrl: false, timestampMs: Self.nowMs())
                 applyEngineState(out)
@@ -545,12 +558,19 @@ public final class KeyboardViewController: UIInputViewController {
             return
         }
         guard acceleratedChunk, let before = textDocumentProxy.documentContextBeforeInput, !before.isEmpty else {
+            let before = textDocumentProxy.documentContextBeforeInput ?? ""
             textDocumentProxy.deleteBackward()
+            let afterDel = before.isEmpty ? "" : String(before.dropLast())
+            bridge.setContext(String(afterDel.suffix(16)))
+            syncEngineToUI()
             return
         }
         // Native-style accelerated hold-delete: erase up to 3 characters without crossing a newline in one jump
         if before.last == "\n" {
             textDocumentProxy.deleteBackward()
+            let afterDel = String(before.dropLast())
+            bridge.setContext(String(afterDel.suffix(16)))
+            syncEngineToUI()
             return
         }
         var count = 0
@@ -561,9 +581,13 @@ public final class KeyboardViewController: UIInputViewController {
                 break
             }
         }
-        for _ in 0..<max(1, count) {
+        let nDel = max(1, count)
+        for _ in 0..<nDel {
             textDocumentProxy.deleteBackward()
         }
+        let afterDel = String(before.dropLast(min(nDel, before.count)))
+        bridge.setContext(String(afterDel.suffix(16)))
+        syncEngineToUI()
     }
 
     private func startBackspaceRepeat() {
@@ -643,14 +667,32 @@ public final class KeyboardViewController: UIInputViewController {
         markedCode = ""
     }
 
+    private func scheduleUserDataFlush() {
+        saveUserDataTimer?.invalidate()
+        saveUserDataTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.bridge.flushUserDataIfNeeded(refreshPublishedLists: false) }
+        }
+    }
+
+    private func syncContextFromProxyIfIdle() {
+        guard bridge.state.preedit.isEmpty else { return }
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        bridge.setContext(String(before.suffix(16)))
+    }
+
+    private func currentIdlePredictions(for st: WubiActionState) -> [String]? {
+        guard st.preedit.isEmpty else { return nil }
+        if st.asciiMode {
+            return []
+        }
+        return bridge.predictNextWords(maxCount: 8)
+    }
+
     private func applyEngineState(_ out: WubiActionState) {
         if !out.commitText.isEmpty {
             textDocumentProxy.insertText(out.commitText)
             markedCode = ""
-            saveUserDataTimer?.invalidate()
-            saveUserDataTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated { self?.bridge.flushUserDataIfNeeded(refreshPublishedLists: false) }
-            }
+            scheduleUserDataFlush()
         }
         if out.preedit.isEmpty {
             cancelMarkedCode()
@@ -676,7 +718,12 @@ public final class KeyboardViewController: UIInputViewController {
         layoutEngine.isComposing = !st.preedit.isEmpty
         layoutEngine.validNextMask = st.validNextMask
         keyCanvas.validNextMask = st.validNextMask
-        ribbonView.update(state: st, dark: isDarkAppearance, clipboardSuggestion: activeClipboardSuggestion)
+        ribbonView.update(
+            state: st,
+            dark: isDarkAppearance,
+            clipboardSuggestion: activeClipboardSuggestion,
+            idleWords: currentIdlePredictions(for: st)
+        )
         refreshKeyboardLayout()
     }
 
@@ -689,7 +736,13 @@ public final class KeyboardViewController: UIInputViewController {
         glassBackdrop.layer.borderWidth = 0
 
         keyCanvas.applyTheme(dark: dark)
-        ribbonView.update(state: bridge.state, dark: dark, clipboardSuggestion: activeClipboardSuggestion)
+        let st = bridge.state
+        ribbonView.update(
+            state: st,
+            dark: dark,
+            clipboardSuggestion: activeClipboardSuggestion,
+            idleWords: currentIdlePredictions(for: st)
+        )
         refreshKeyboardLayout()
     }
 

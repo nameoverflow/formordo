@@ -512,6 +512,17 @@ impl DictView {
         compose_phrase_code(&stems)
     }
 
+    /// Check whether `text` (2+ chars) exists as a multi-char entry in this dictionary, returning its weight.
+    pub fn contains_exact_word(&self, text: &str) -> Option<u32> {
+        let code = self.encode_phrase(text)?;
+        for e in self.lookup_exact(code, false) {
+            if e.text == text {
+                return Some(e.weight);
+            }
+        }
+        None
+    }
+
     pub fn stats(&self) -> (usize, usize, usize) {
         (self.bucket_count, self.entry_count, self.char_count)
     }
@@ -920,5 +931,83 @@ impl AuxView {
             }
         }
         0.0
+    }
+
+    /// Returns all bigrams `(next_char, pmi_boost)` starting with `prev_char` via O(log N) binary search.
+    pub fn bigrams_after(&self, prev_char: char) -> Vec<(char, f32)> {
+        if self.bigram_count == 0 {
+            return Vec::new();
+        }
+        let target_hi = prev_char as u64;
+        let lo_key = target_hi << 32;
+        let b = self.buf.as_slice();
+        let mut lo = 0usize;
+        let mut hi = self.bigram_count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let k = read_u64(b, self.bg_off + mid * BIGRAM_STRIDE);
+            if k < lo_key {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let mut out = Vec::new();
+        let mut idx = lo;
+        while idx < self.bigram_count {
+            let off = self.bg_off + idx * BIGRAM_STRIDE;
+            let k = read_u64(b, off);
+            if (k >> 32) != target_hi {
+                break;
+            }
+            if let Some(next_ch) = char::from_u32((k & 0xFFFF_FFFF) as u32) {
+                let q8 = read_u16(b, off + 8);
+                out.push((next_ch, (q8 as f32) / 256.0));
+            }
+            idx += 1;
+        }
+        out
+    }
+
+    /// Returns all trigrams `(next_char, residual_boost)` following `(prev2, prev1)` via O(log N) binary search.
+    pub fn trigrams_after(&self, prev2: char, prev1: char) -> Vec<(char, f32)> {
+        if self.trigram_count == 0 {
+            return Vec::new();
+        }
+        let u0 = prev2 as u32;
+        let u1 = prev1 as u32;
+        if u0 > 0xFFFF || u1 > 0xFFFF {
+            return Vec::new();
+        }
+        let prefix32 = ((u0 as u64) << 16) | (u1 as u64);
+        let lo_key48 = prefix32 << 16;
+        let b = self.buf.as_slice();
+        let mut lo = 0usize;
+        let mut hi = self.trigram_count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let packed = read_u64(b, self.trigram_off + mid * TRIGRAM_STRIDE);
+            if (packed >> 16) < lo_key48 {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let mut out = Vec::new();
+        let mut idx = lo;
+        while idx < self.trigram_count {
+            let off = self.trigram_off + idx * TRIGRAM_STRIDE;
+            let packed = read_u64(b, off);
+            let k48 = packed >> 16;
+            if (k48 >> 16) != prefix32 {
+                break;
+            }
+            if let Some(next_ch) = char::from_u32((k48 & 0xFFFF) as u32) {
+                let q8 = (packed & 0xFFFF) as u16;
+                out.push((next_ch, (q8 as f32) / 256.0));
+            }
+            idx += 1;
+        }
+        out
     }
 }

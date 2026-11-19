@@ -557,6 +557,26 @@ public final class WubiBridge: ObservableObject {
         refreshState()
     }
 
+    public func setContext(_ text: String) {
+        guard let h = handle else { return }
+        text.withCString { wubi_engine_set_context(h, $0) }
+    }
+
+    public func acceptPrediction(_ text: String, timestampMs: UInt64) {
+        guard let h = handle else { return }
+        text.withCString { wubi_engine_accept_prediction(h, $0, timestampMs) }
+    }
+
+    public func predictNextWords(maxCount: Int = 8) -> [String] {
+        guard let h = handle else { return [] }
+        let json = takeString(wubi_engine_predict_next_json(h, UInt32(max(1, maxCount))))
+        if let data = json.data(using: .utf8),
+           let list = try? decoder.decode([String].self, from: data) {
+            return list
+        }
+        return []
+    }
+
     @discardableResult
     public func addUserPhrase(_ text: String, persist: Bool = true) -> String {
         guard let h = handle else { return "" }
