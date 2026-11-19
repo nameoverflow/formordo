@@ -1,4 +1,4 @@
-# 棱五笔 (PrisWubi)
+# 形序 (Formordo)
 
 面向 **macOS (`InputMethodKit`)** 与 **iOS (`UIInputViewController` 虚拟键盘扩展 + SwiftUI 宿主 App)** 的极速精简原生五笔输入法。
 
@@ -16,15 +16,15 @@
    - 支持 **空码救回**、**两键交界滑偏重判 (Soft Voronoi Hitbox)**、**双指快速换位纠错 (`ab -> ba`)**，以及 **每键个人拇指偏移 EMA 在线自适应校准**（限幅 `±0.20` 键宽防跑偏）。
    - 默认对非精确纠错项抑制「四码唯一盲目自动上屏」，绝不乱顶错字。
 4. **贴合苹果原生的双端界面**：
-   - **macOS (`Sources/`)**：无边框 `NSPanel` + `NSVisualEffectView` 原生毛玻璃候选浮窗（横/竖排、深/浅色自适应）、系统设置风格偏好面板（内置触屏热区实时演练台）、输入法菜单栏快捷切表。
+   - **macOS (`Sources/`)**：无边框 `NSPanel` 纯 AppKit 单行候选浮窗（横/竖排、深/浅色自适应）、系统设置风格偏好面板、输入法菜单栏快捷切表与 Shift 中英切换 HUD。
    - **iOS (`iOS/`)**：
-     - **`PrisWubiKeyboard` 虚拟键盘扩展 (`iOS/KeyboardExtension/`)**：1:1 原生 4 行键帽几何、三层键盘（`ABC` 26 键 / `123` 数字与中英标点 / `#+=` 符号）、连颈式按键放大气泡（Key Callout）、长按/横滑空格光标触控板、长按退格加速连删、动态蓝色高亮回车键、横向候选条 + `⌄` 四列全屏展开候选面板、免「允许完全访问」键盘内快捷设置与系统按键音。
-     - **`PrisWubiApp` 宿主应用 (`iOS/HostApp/`)**：三步启用引导与实时打字试手框、五笔规则配置、**26 键个人触控热区偏移图**、App Group 跨进程词库同步管理。
+     - **虚拟键盘扩展 (`iOS/KeyboardExtension/`)**：1:1 对齐 iOS 原生 4 行键帽几何（`273pt` 总高）、三层键盘（`ABC` 26 键 / `123` 数字与中英标点 / `#+=` 符号）、多指 Rollover 连打、按键放大气泡（Key Callout）、长按/滑动空格二维光标触控板、长按退格加速连删、候选栏中央剪贴板提示（自动提取剪贴板短信/邮件验证码）、横向候选条 + `⌄` 四列全屏展开候选面板。
+     - **宿主应用 (`iOS/HostApp/`)**：三步启用引导与实时打字试手区、五笔规则与剪贴板提示配置、**26 键个人触控热区偏移图**、个人词库管理，并通过同 Team Keychain 分组与键盘扩展同步设置。
 
 ## 构建与验证
 
 ```sh
-make test          # 运行 Rust 核心测试 + macOS Swift 桥接测试 + iOS 键盘几何与视口触点测试
+make test          # 运行 Rust 核心测试 + macOS Swift 桥接测试 + iOS 键盘几何与剪贴板测试
 make app           # 编译并签名 macOS 输入法 build/PrisWubi.app
 make install       # 安装并注册至 ~/Library/Input Methods/PrisWubi.app
 make ios-core      # 交叉编译 iOS 真机 (aarch64-apple-ios) 与模拟器静态库
@@ -34,4 +34,4 @@ make ios-previews  # 渲染 iPhone 2x Retina 虚拟键盘与宿主 App 预览图
 ```
 
 ### 真机 / 模拟器运行 iOS 端
-在装有完整 `Xcode.app` 的 Mac 上直接打开 `iOS/PrisWubi.xcodeproj`，选择 `PrisWubiApp` Scheme（在 Signing & Capabilities 选定你的开发 Team 并确认 App Group `group.com.priswubi.shared`），按 `⌘R` 即可自动触发 `iOS/Scripts/build-rust-ios.sh` 编译 Rust 静态库并安装到 iPhone 或模拟器。仓库同时附带 `.github/workflows/build.yml` 自动构建双端产物。
+在装有完整 `Xcode.app` 的 Mac 上打开 `iOS/PrisWubi.xcodeproj`，选择 `PrisWubiApp` Scheme 并在 Signing & Capabilities 选定你的开发 Team，按 `⌘R` 即可自动触发 `iOS/Scripts/build-rust-ios.sh` 编译 Rust 静态库并安装到 iPhone 或模拟器。
