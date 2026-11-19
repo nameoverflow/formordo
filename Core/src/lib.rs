@@ -507,4 +507,17 @@ mod tests {
         assert!((aux.bigram_boost('入', '法') - 3.0).abs() < 0.01);
         assert_eq!(aux.trigram_boost('输', '入', '法'), 0.0);
     }
+
+    #[test]
+    fn config_auto_space_toml_roundtrip() {
+        let mut cfg = WubiConfig::default();
+        assert!(cfg.auto_space_zh_en);
+        assert!(cfg.auto_space_digits);
+        cfg.auto_space_zh_en = true;
+        cfg.auto_space_digits = false;
+        let toml = cfg.to_toml_string();
+        let parsed = WubiConfig::from_toml_str(&toml);
+        assert!(parsed.auto_space_zh_en);
+        assert!(!parsed.auto_space_digits);
+    }
 }

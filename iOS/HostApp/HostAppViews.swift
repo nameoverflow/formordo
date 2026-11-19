@@ -278,6 +278,12 @@ public struct IOSHostRootView: View {
                         Divider()
                         iosToggleRow("中文标点与引号智能配对", sub: "自动转换全角标点并成对输入引号", isOn: binding(\.smartPunctuation))
                         Divider()
+                        iosToggleRow("中英文之间自动加空格", sub: "中英混输、直输英文及剪贴板插入时自动补全空格", isOn: binding(\.autoSpaceZhEn))
+                        if bridge.prefs.autoSpaceZhEn {
+                            Divider()
+                            iosToggleRow("数字与中文之间也加空格", sub: "在汉字与数字边界自动加空格（如「iOS 26 版」）", isOn: binding(\.autoSpaceDigits))
+                        }
+                        Divider()
                         iosToggleRow("候选栏剪贴板提示", sub: "空闲时在候选栏中央显示最近复制内容，并自动提取剪贴板验证码（需开启完全访问）", isOn: binding(\.clipboardSuggestion))
                     }
                     .padding(14)

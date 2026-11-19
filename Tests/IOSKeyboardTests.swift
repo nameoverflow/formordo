@@ -267,9 +267,29 @@ struct IOSKeyboardTests {
         // Preference TOML round-trip
         var prefs = WubiPreferences()
         assert(prefs.clipboardSuggestion == true)
+        assert(prefs.autoSpaceZhEn == true)
+        assert(prefs.autoSpaceDigits == true)
         prefs.clipboardSuggestion = false
+        prefs.autoSpaceZhEn = false
+        prefs.autoSpaceDigits = false
         let parsedPrefs = WubiPreferences.fromTOML(prefs.toTOML())
         assert(parsedPrefs.clipboardSuggestion == false)
+        assert(parsedPrefs.autoSpaceZhEn == false)
+        assert(parsedPrefs.autoSpaceDigits == false)
+
+        // iOS-specific auto-space composition flow with `overrideBefore` (simulating `markedCode` isolation + 5th-code push)
+        var iosCompTracker = AutoSpaceContextTracker()
+        let onOpts = AutoSpaceOptions(enabled: true, spaceDigits: true)
+        let baseBeforeMarked = iosCompTracker.effectiveBefore(hostBefore: "hello", hostBeforeIsAuthoritative: false)
+        // 5th-code push commits "国" with leading space while `markedCode` becomes "q"
+        let pushCommit = iosCompTracker.prepareCommit("国", hostBefore: "hello", hostBeforeIsAuthoritative: false, overrideBefore: baseBeforeMarked, splitInternal: true, options: onOpts)
+        assert(pushCommit == " 国")
+        let nextBase = iosCompTracker.effectiveBefore(hostBefore: "hello", hostBeforeIsAuthoritative: false)
+        assert(nextBase == "hello 国")
+        let finalCommit = iosCompTracker.prepareCommit("我", hostBefore: "hello", hostBeforeIsAuthoritative: false, overrideBefore: nextBase, splitInternal: true, options: onOpts)
+        assert(finalCommit == "我")
+        // 123-plane digit after CJK
+        assert(iosCompTracker.prepareCommit("1", hostBefore: "hello 国我", hostBeforeIsAuthoritative: false, splitInternal: false, options: onOpts) == " 1")
 
         // 12. Guard against transient full-screen bounds (e.g. 440x903 while paste alert interrupts layout):
         //     keyH must stay clamped <= 48pt and all 4 rows must remain inside the 220pt visible tray!

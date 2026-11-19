@@ -178,6 +178,10 @@ pub struct WubiConfig {
     pub semicolon_quote_select: bool,
     /// 中文标点与成对引号智能配对
     pub smart_punctuation: bool,
+    /// 中英文之间自动加空格
+    pub auto_space_zh_en: bool,
+    /// 数字与中文之间也自动加空格
+    pub auto_space_digits: bool,
     /// 扩展生僻大字集开关
     pub enable_rare_charset: bool,
     /// Shift 中英切换策略
@@ -207,6 +211,8 @@ impl Default for WubiConfig {
             z_omnipotent: true,
             semicolon_quote_select: false,
             smart_punctuation: true,
+            auto_space_zh_en: true,
+            auto_space_digits: true,
             enable_rare_charset: false,
             shift_toggle_mode: ShiftToggleMode::CommitCode,
             page_size: 5,
@@ -231,7 +237,9 @@ impl WubiConfig {
                 "# Shift 切换中英行为: \"commit_code\" | \"commit_first\" | \"clear\"\n",
                 "shift_toggle_mode = \"{}\"\n",
                 "smart_punctuation = {}\n",
-                "semicolon_quote_select = {}\n\n",
+                "semicolon_quote_select = {}\n",
+                "auto_space_zh_en = {}\n",
+                "auto_space_digits = {}\n\n",
                 "[typing]\n",
                 "fourth_code_auto_commit = {}\n",
                 "fifth_code_push_commit = {}\n",
@@ -259,6 +267,8 @@ impl WubiConfig {
             self.shift_toggle_mode.as_tag(),
             self.smart_punctuation,
             self.semicolon_quote_select,
+            self.auto_space_zh_en,
+            self.auto_space_digits,
             self.fourth_code_auto_commit,
             self.fifth_code_push_commit,
             self.fourth_empty_behavior.as_tag(),
@@ -313,6 +323,8 @@ impl WubiConfig {
                 (_, "shift_toggle_mode") => cfg.shift_toggle_mode = ShiftToggleMode::from_tag(val),
                 (_, "smart_punctuation") => cfg.smart_punctuation = parse_bool(val),
                 (_, "semicolon_quote_select") => cfg.semicolon_quote_select = parse_bool(val),
+                (_, "auto_space_zh_en") => cfg.auto_space_zh_en = parse_bool(val),
+                (_, "auto_space_digits") => cfg.auto_space_digits = parse_bool(val),
                 (_, "fourth_code_auto_commit") => cfg.fourth_code_auto_commit = parse_bool(val),
                 (_, "fifth_code_push_commit") => cfg.fifth_code_push_commit = parse_bool(val),
                 (_, "fourth_empty_behavior") => {

@@ -545,6 +545,20 @@ public struct SettingsRootView: View {
                     )
                     Divider()
                     toggleRow(
+                        title: "中英文之间自动加空格",
+                        subtitle: "中英混输或切换上屏时自动在汉字与英文边界补全空格（保留 URL 及退格删去的空格）",
+                        isOn: binding(\.autoSpaceZhEn)
+                    )
+                    if bridge.prefs.autoSpaceZhEn {
+                        Divider()
+                        toggleRow(
+                            title: "数字与中文之间也加空格",
+                            subtitle: "在汉字与数字边界自动加空格（如「第 2 候选词」；关闭后仅对英文词加空格）",
+                            isOn: binding(\.autoSpaceDigits)
+                        )
+                    }
+                    Divider()
+                    toggleRow(
                         title: "分号 (;) 与引号 (') 快捷选重",
                         subtitle: "编码输入中按 ; 直接上屏第 2 候选词、按 ' 上屏第 3 候选词",
                         isOn: binding(\.semicolonQuoteSelect)

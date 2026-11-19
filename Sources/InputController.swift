@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import InputMethodKit
 
 @objc(PrisWubiInputController)
@@ -7,6 +8,9 @@ public final class PrisWubiInputController: IMKInputController {
     private weak var activeClient: (any IMKTextInput & NSObjectProtocol)?
     private var shiftKeyDownAlone: Bool = false
     private var shiftDownTimestamp: TimeInterval = 0
+    private var autoSpaceTracker = AutoSpaceContextTracker()
+    private var lastExpectedAnchor: Int? = nil
+    private var sawClientSupportForRanges: Bool = false
 
     public override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
         super.init(server: server, delegate: delegate, client: inputClient)
@@ -38,12 +42,18 @@ public final class PrisWubiInputController: IMKInputController {
     public override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
         self.activeClient = sender as? (any IMKTextInput & NSObjectProtocol)
+        autoSpaceTracker.invalidate()
+        lastExpectedAnchor = nil
+        sawClientSupportForRanges = false
         configurePanelCallbacks()
     }
 
     public override func deactivateServer(_ sender: Any!) {
         commitPendingAndHide(sender)
         WubiBridge.shared.flushUserDataIfNeeded()
+        autoSpaceTracker.invalidate()
+        lastExpectedAnchor = nil
+        sawClientSupportForRanges = false
         super.deactivateServer(sender)
     }
 
@@ -56,11 +66,10 @@ public final class PrisWubiInputController: IMKInputController {
         let clientObj = (sender as? (any IMKTextInput & NSObjectProtocol)) ?? activeClient
         let pre = WubiBridge.shared.state.preedit
         if !pre.isEmpty {
-            if let first = WubiBridge.shared.state.candidates.first?.text {
-                clientObj?.insertText(first, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
-            } else {
-                clientObj?.insertText(pre, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
-            }
+            let rawText = WubiBridge.shared.state.candidates.first?.text ?? pre
+            let formatted = formatTextForCommit(rawText, splitInternal: true, client: clientObj)
+            clientObj?.insertText(formatted, replacementRange: NSRange(location: NSNotFound, length: NSNotFound))
+            advanceExpectedAnchor(by: formatted.utf16.count)
             WubiBridge.shared.clearComposition()
         }
         CandidatePanelController.shared.hide()
@@ -105,6 +114,8 @@ public final class PrisWubiInputController: IMKInputController {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let hasCmdOrOption = mods.contains(.command) || mods.contains(.option)
         if hasCmdOrOption {
+            autoSpaceTracker.invalidate()
+            lastExpectedAnchor = nil
             return false
         }
         let hasCtrl = mods.contains(.control)
@@ -118,7 +129,7 @@ public final class PrisWubiInputController: IMKInputController {
         )
 
         if !out.consumed {
-            return false
+            return handlePassthroughAutoSpace(event: event, hasCtrl: hasCtrl, client: clientObj)
         }
 
         applyEngineOutput(out, client: clientObj)
@@ -134,10 +145,12 @@ public final class PrisWubiInputController: IMKInputController {
         }
 
         if !out.commitText.isEmpty {
+            let formatted = formatTextForCommit(out.commitText, splitInternal: true, client: client)
             client?.insertText(
-                out.commitText,
+                formatted,
                 replacementRange: NSRange(location: NSNotFound, length: NSNotFound)
             )
+            advanceExpectedAnchor(by: formatted.utf16.count)
             WubiBridge.shared.flushUserDataIfNeeded()
         }
 
@@ -242,6 +255,15 @@ public final class PrisWubiInputController: IMKInputController {
         orientItem.target = self
         m.addItem(orientItem)
 
+        let autoSpaceItem = NSMenuItem(
+            title: "中英文之间自动加空格",
+            action: #selector(toggleAutoSpace(_:)),
+            keyEquivalent: ""
+        )
+        autoSpaceItem.target = self
+        autoSpaceItem.state = WubiBridge.shared.prefs.autoSpaceZhEn ? .on : .off
+        m.addItem(autoSpaceItem)
+
         m.addItem(.separator())
 
         let prefsItem = NSMenuItem(
@@ -278,8 +300,173 @@ public final class PrisWubiInputController: IMKInputController {
         WubiBridge.shared.applyAndSavePreferences(p)
     }
 
+    @objc private func toggleAutoSpace(_ sender: Any?) {
+        var p = WubiBridge.shared.prefs
+        p.autoSpaceZhEn.toggle()
+        WubiBridge.shared.applyAndSavePreferences(p)
+    }
+
     public override func showPreferences(_ sender: Any!) {
         SettingsWindowController.shared.show()
+    }
+
+    private func handlePassthroughAutoSpace(
+        event: NSEvent,
+        hasCtrl: Bool,
+        client: (any IMKTextInput & NSObjectProtocol)?
+    ) -> Bool {
+        if hasCtrl {
+            autoSpaceTracker.invalidate()
+            lastExpectedAnchor = nil
+            return false
+        }
+
+        switch event.keyCode {
+        case 0x33: // Backspace
+            let hostBefore = readHostContextBefore(client: client)
+            let eff = autoSpaceTracker.effectiveBefore(hostBefore: hostBefore, hostBeforeIsAuthoritative: true)
+            let delUtf16 = eff.last?.utf16.count ?? 1
+            autoSpaceTracker.willDeleteBackward(hostBefore: hostBefore, hostBeforeIsAuthoritative: true)
+            if let anchor = lastExpectedAnchor {
+                lastExpectedAnchor = max(0, anchor - delUtf16)
+            }
+            return false
+
+        case 0x24, 0x4C: // Return / KP Enter
+            let hostBefore = readHostContextBefore(client: client)
+            autoSpaceTracker.recordPassthrough("\n", hostBefore: hostBefore, hostBeforeIsAuthoritative: true)
+            advanceExpectedAnchor(by: 1)
+            return false
+
+        case 0x30: // Tab
+            let hostBefore = readHostContextBefore(client: client)
+            autoSpaceTracker.recordPassthrough("\t", hostBefore: hostBefore, hostBeforeIsAuthoritative: true)
+            advanceExpectedAnchor(by: 1)
+            return false
+
+        case 0x31: // Space
+            let hostBefore = readHostContextBefore(client: client)
+            autoSpaceTracker.recordPassthrough(" ", hostBefore: hostBefore, hostBeforeIsAuthoritative: true)
+            advanceExpectedAnchor(by: 1)
+            return false
+
+        case 0x35, 0x73, 0x74, 0x75, 0x77, 0x79, 0x7B, 0x7C, 0x7D, 0x7E:
+            // Esc, Home, PgUp, ForwardDel, End, PgDn, Left, Right, Down, Up
+            autoSpaceTracker.invalidate()
+            lastExpectedAnchor = nil
+            return false
+
+        default:
+            break
+        }
+
+        guard let chars = event.characters, !chars.isEmpty,
+              let firstScalar = chars.unicodeScalars.first else {
+            return false
+        }
+        if firstScalar.value < 0x20
+            || (firstScalar.value >= 0xF700 && firstScalar.value <= 0xF8FF)
+            || firstScalar.value == 0x7F
+        {
+            autoSpaceTracker.invalidate()
+            lastExpectedAnchor = nil
+            return false
+        }
+
+        let hostBefore = readHostContextBefore(client: client)
+        let options = AutoSpaceOptions(prefs: WubiBridge.shared.prefs)
+        if !IsSecureEventInputEnabled(),
+           AutoSpaceFormatter.isAutoSpaceRightTrigger(chars, options: options)
+        {
+            let formatted = autoSpaceTracker.prepareCommit(
+                chars,
+                hostBefore: hostBefore,
+                hostBeforeIsAuthoritative: true,
+                splitInternal: false,
+                options: options
+            )
+            if formatted != chars {
+                client?.insertText(
+                    formatted,
+                    replacementRange: NSRange(location: NSNotFound, length: NSNotFound)
+                )
+                advanceExpectedAnchor(by: formatted.utf16.count)
+                return true
+            }
+            advanceExpectedAnchor(by: chars.utf16.count)
+            return false
+        }
+
+        autoSpaceTracker.recordPassthrough(chars, hostBefore: hostBefore, hostBeforeIsAuthoritative: true)
+        advanceExpectedAnchor(by: chars.utf16.count)
+        return false
+    }
+
+    private func formatTextForCommit(
+        _ text: String,
+        splitInternal: Bool,
+        client: (any IMKTextInput & NSObjectProtocol)?
+    ) -> String {
+        guard !IsSecureEventInputEnabled() else { return text }
+        let hostBefore = readHostContextBefore(client: client)
+        let options = AutoSpaceOptions(prefs: WubiBridge.shared.prefs)
+        return autoSpaceTracker.prepareCommit(
+            text,
+            hostBefore: hostBefore,
+            hostBeforeIsAuthoritative: true,
+            splitInternal: splitInternal,
+            options: options
+        )
+    }
+
+    private func readHostContextBefore(client: (any IMKTextInput & NSObjectProtocol)?) -> String? {
+        guard let client else { return nil }
+        let marked = client.markedRange()
+        let sel = client.selectedRange()
+        let anchor = (marked.location != NSNotFound) ? marked.location : sel.location
+        guard anchor != NSNotFound else {
+            lastExpectedAnchor = nil
+            return nil
+        }
+
+        let docLen = client.length()
+        let safeAnchor = (docLen != NSNotFound && docLen >= 0) ? min(anchor, docLen) : anchor
+
+        // Guard against clients that stub `selectedRange()` and `length()` to always return 0.
+        if safeAnchor == 0 && (docLen == NSNotFound || docLen == 0) && !sawClientSupportForRanges {
+            if let expected = lastExpectedAnchor, expected > 0 {
+                lastExpectedAnchor = nil
+                return nil
+            }
+            lastExpectedAnchor = 0
+            return nil
+        }
+
+        if let expected = lastExpectedAnchor, safeAnchor != expected {
+            autoSpaceTracker.invalidate()
+        }
+        lastExpectedAnchor = safeAnchor
+
+        if safeAnchor == 0 {
+            if docLen != NSNotFound && docLen > 0 {
+                sawClientSupportForRanges = true
+            }
+            return ""
+        }
+        let len = min(safeAnchor, 48)
+        let start = safeAnchor - len
+        guard let sub = client.attributedSubstring(from: NSRange(location: start, length: len))?.string,
+              !sub.isEmpty else {
+            return nil
+        }
+        sawClientSupportForRanges = true
+        return sub
+    }
+
+    private func advanceExpectedAnchor(by utf16Count: Int) {
+        if let anchor = lastExpectedAnchor {
+            lastExpectedAnchor = anchor + utf16Count
+        }
     }
 
     private static func nowMs() -> UInt64 {

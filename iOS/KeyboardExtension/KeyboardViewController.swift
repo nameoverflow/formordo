@@ -20,6 +20,8 @@ public final class KeyboardViewController: UIInputViewController {
     private var lastVisualKeySignature: VisualLayoutSignature?
     private var planeBeforePress: IOSKeyPlane = .letters
     private var markedCode = ""
+    private var autoSpaceTracker = AutoSpaceContextTracker()
+    private var compositionBaseContext: String?
     private let clipboardStore = IOSClipboardSuggestionStore()
     private let clipboardReadQueue = DispatchQueue(label: "com.priswubi.clipboard", qos: .userInitiated)
     private var activeClipboardSuggestion: IOSClipboardSuggestion?
@@ -63,6 +65,8 @@ public final class KeyboardViewController: UIInputViewController {
         super.viewWillAppear(animated)
         feedback.prepare()
         bridge.loadConfigAndUser()
+        autoSpaceTracker.invalidate()
+        compositionBaseContext = nil
         applyDesiredTrayDimensions()
         syncContextFromProxyIfIdle()
         refreshClipboardSuggestion(allowAsyncRead: false)
@@ -98,6 +102,8 @@ public final class KeyboardViewController: UIInputViewController {
         saveUserDataTimer?.invalidate()
         cancelMarkedCode()
         bridge.clearComposition()
+        autoSpaceTracker.invalidate()
+        compositionBaseContext = nil
         bridge.flushUserDataIfNeeded(refreshPublishedLists: false)
         feedback.suspend()
     }
@@ -133,6 +139,9 @@ public final class KeyboardViewController: UIInputViewController {
     public override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
         syncContextFromProxyIfIdle()
+        if markedCode.isEmpty {
+            autoSpaceTracker.reconcileExternalContext(hostBefore: textDocumentProxy.documentContextBeforeInput)
+        }
         refreshClipboardSuggestion(allowAsyncRead: hasAppeared)
         syncProxyTraits()
     }
@@ -365,6 +374,8 @@ public final class KeyboardViewController: UIInputViewController {
                 }
             }
             if moved {
+                self.autoSpaceTracker.invalidate()
+                self.compositionBaseContext = nil
                 self.feedback.fireSoftStep(playClick: false)
                 self.syncContextFromProxyIfIdle()
                 self.syncEngineToUI()
@@ -383,7 +394,7 @@ public final class KeyboardViewController: UIInputViewController {
             guard let self else { return }
             self.keyCanvas.flushPendingTouches()
             self.feedback.fireSoftStep(playClick: true)
-            self.textDocumentProxy.insertText(word)
+            self.insertTextWithAutoSpace(word, splitInternal: true)
             self.bridge.acceptPrediction(word, timestampMs: Self.nowMs())
             self.scheduleUserDataFlush()
             self.syncEngineToUI()
@@ -393,7 +404,7 @@ public final class KeyboardViewController: UIInputViewController {
             guard let self else { return }
             self.keyCanvas.flushPendingTouches()
             self.feedback.fireSoftStep(playClick: true)
-            self.textDocumentProxy.insertText(suggestion.insertText)
+            self.insertTextWithAutoSpace(suggestion.insertText, splitInternal: false)
             self.clipboardStore.consume(changeCount: suggestion.changeCount)
             self.activeClipboardSuggestion = nil
             self.syncEngineToUI()
@@ -455,6 +466,7 @@ public final class KeyboardViewController: UIInputViewController {
 
         expandedGrid.onClear = { [weak self] in
             self?.feedback.fireSoftStep(playClick: true)
+            self?.compositionBaseContext = nil
             self?.cancelMarkedCode()
             self?.bridge.clearComposition()
             self?.expandedGrid.isHidden = true
@@ -471,7 +483,7 @@ public final class KeyboardViewController: UIInputViewController {
                 commitPendingFirstIfComposing()
                 let ch = String(UnicodeScalar(ascii))
                 let outStr = layoutEngine.shiftState.isUppercase ? ch.uppercased() : ch.lowercased()
-                textDocumentProxy.insertText(outStr)
+                insertTextWithAutoSpace(outStr, splitInternal: false)
                 bridge.setContext("")
                 layoutEngine.consumeOneShotShiftIfNeeded()
                 syncEngineToUI()
@@ -488,7 +500,16 @@ public final class KeyboardViewController: UIInputViewController {
 
         case .symbol(let sym):
             commitPendingFirstIfComposing()
-            textDocumentProxy.insertText(sym)
+            if AutoSpaceFormatter.isAutoSpaceRightTrigger(sym, options: AutoSpaceOptions(prefs: bridge.prefs)) {
+                insertTextWithAutoSpace(sym, splitInternal: false)
+            } else {
+                autoSpaceTracker.recordPassthrough(
+                    sym,
+                    hostBefore: textDocumentProxy.documentContextBeforeInput,
+                    hostBeforeIsAuthoritative: false
+                )
+                textDocumentProxy.insertText(sym)
+            }
             bridge.setContext("")
             if IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol(sym, on: layoutEngine.plane) {
                 layoutEngine.switchPlane(.letters)
@@ -520,6 +541,11 @@ public final class KeyboardViewController: UIInputViewController {
 
         case .space:
             if bridge.state.preedit.isEmpty {
+                autoSpaceTracker.recordPassthrough(
+                    " ",
+                    hostBefore: textDocumentProxy.documentContextBeforeInput,
+                    hostBeforeIsAuthoritative: false
+                )
                 textDocumentProxy.insertText(" ")
                 bridge.setContext("")
                 syncEngineToUI()
@@ -530,6 +556,11 @@ public final class KeyboardViewController: UIInputViewController {
 
         case .returnKey:
             if bridge.state.preedit.isEmpty {
+                autoSpaceTracker.recordPassthrough(
+                    "\n",
+                    hostBefore: textDocumentProxy.documentContextBeforeInput,
+                    hostBeforeIsAuthoritative: false
+                )
                 textDocumentProxy.insertText("\n")
                 bridge.setContext("")
                 syncEngineToUI()
@@ -542,11 +573,9 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func commitPendingFirstIfComposing() {
         guard !bridge.state.preedit.isEmpty else { return }
-        if let first = bridge.state.candidates.first?.text {
-            textDocumentProxy.insertText(first)
-        } else {
-            textDocumentProxy.insertText(bridge.state.preedit)
-        }
+        let rawText = bridge.state.candidates.first?.text ?? bridge.state.preedit
+        insertTextWithAutoSpace(rawText, splitInternal: true, overrideBefore: compositionBaseContext)
+        compositionBaseContext = nil
         markedCode = ""
         bridge.clearComposition()
     }
@@ -559,12 +588,17 @@ public final class KeyboardViewController: UIInputViewController {
         }
         guard acceleratedChunk, let before = textDocumentProxy.documentContextBeforeInput, !before.isEmpty else {
             let before = textDocumentProxy.documentContextBeforeInput ?? ""
+            autoSpaceTracker.willDeleteBackward(
+                hostBefore: before,
+                hostBeforeIsAuthoritative: false
+            )
             textDocumentProxy.deleteBackward()
             let afterDel = before.isEmpty ? "" : String(before.dropLast())
             bridge.setContext(String(afterDel.suffix(16)))
             syncEngineToUI()
             return
         }
+        autoSpaceTracker.invalidate()
         // Native-style accelerated hold-delete: erase up to 3 characters without crossing a newline in one jump
         if before.last == "\n" {
             textDocumentProxy.deleteBackward()
@@ -688,15 +722,54 @@ public final class KeyboardViewController: UIInputViewController {
         return bridge.predictNextWords(maxCount: 8)
     }
 
+    private func isAutoSpacingAllowedForProxy() -> Bool {
+        if textDocumentProxy.isSecureTextEntry == true { return false }
+        if textDocumentProxy.textContentType == .oneTimeCode { return false }
+        switch textDocumentProxy.keyboardType {
+        case .URL, .emailAddress, .numberPad, .phonePad, .decimalPad, .asciiCapableNumberPad:
+            return false
+        default:
+            return true
+        }
+    }
+
+    private func insertTextWithAutoSpace(
+        _ text: String,
+        splitInternal: Bool,
+        overrideBefore: String? = nil
+    ) {
+        guard !text.isEmpty else { return }
+        let options = isAutoSpacingAllowedForProxy()
+            ? AutoSpaceOptions(prefs: bridge.prefs)
+            : AutoSpaceOptions(enabled: false, spaceDigits: false)
+        let formatted = autoSpaceTracker.prepareCommit(
+            text,
+            hostBefore: textDocumentProxy.documentContextBeforeInput,
+            hostBeforeIsAuthoritative: false,
+            overrideBefore: overrideBefore,
+            splitInternal: splitInternal,
+            options: options
+        )
+        textDocumentProxy.insertText(formatted)
+    }
+
     private func applyEngineState(_ out: WubiActionState) {
         if !out.commitText.isEmpty {
-            textDocumentProxy.insertText(out.commitText)
+            let base = markedCode.isEmpty ? nil : compositionBaseContext
+            insertTextWithAutoSpace(out.commitText, splitInternal: true, overrideBefore: base)
             markedCode = ""
             scheduleUserDataFlush()
         }
         if out.preedit.isEmpty {
+            compositionBaseContext = nil
             cancelMarkedCode()
         } else if out.preedit != markedCode {
+            if markedCode.isEmpty {
+                compositionBaseContext = autoSpaceTracker.effectiveBefore(
+                    hostBefore: textDocumentProxy.documentContextBeforeInput,
+                    hostBeforeIsAuthoritative: false
+                )
+            }
             textDocumentProxy.setMarkedText(out.preedit, selectedRange: NSRange(location: out.preedit.utf16.count, length: 0))
             markedCode = out.preedit
         }

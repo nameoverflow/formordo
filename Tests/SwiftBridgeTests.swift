@@ -46,11 +46,119 @@ struct SwiftBridgeTests {
 
         // 4. Verify TOML round-trip
         var prefs = bridge.prefs
+        assert(prefs.autoSpaceZhEn == true)
+        assert(prefs.autoSpaceDigits == true)
         prefs.strictShortcode = true
         prefs.promoteThreshold = 0.86
+        prefs.autoSpaceDigits = false
         let decoded = WubiPreferences.fromTOML(prefs.toTOML())
         assert(decoded.strictShortcode == true)
         assert(abs(decoded.promoteThreshold - 0.86) < 0.005)
+        assert(decoded.autoSpaceZhEn == true)
+        assert(decoded.autoSpaceDigits == false)
+
+        // 4b. Verify Chinese/English auto-spacing formatter & edge cases
+        let allOn = AutoSpaceOptions(enabled: true, spaceDigits: true)
+        let noDigits = AutoSpaceOptions(enabled: true, spaceDigits: false)
+        let allOff = AutoSpaceOptions(enabled: false, spaceDigits: true)
+
+        // Basic CJK <-> EN & Digits
+        assert(AutoSpaceFormatter.format(before: "你好", inserting: "hello", splitInternal: false, options: allOn).text == " hello")
+        assert(AutoSpaceFormatter.format(before: "hello", inserting: "世界", splitInternal: false, options: allOn).text == " 世界")
+        assert(AutoSpaceFormatter.format(before: "第", inserting: "1", splitInternal: false, options: allOn).text == " 1")
+        assert(AutoSpaceFormatter.format(before: "2026", inserting: "年", splitInternal: false, options: allOn).text == " 年")
+
+        // Digits toggle (`spaceDigits: false` keeps `2026年` / `第1`, yet still spaces `iPhone17 手机` / `5G 网络`)
+        assert(AutoSpaceFormatter.format(before: "第", inserting: "1", splitInternal: false, options: noDigits).text == "1")
+        assert(AutoSpaceFormatter.format(before: "2026", inserting: "年", splitInternal: false, options: noDigits).text == "年")
+        assert(AutoSpaceFormatter.format(before: "3.14", inserting: "倍", splitInternal: false, options: noDigits).text == "倍")
+        assert(AutoSpaceFormatter.format(before: "iPhone17", inserting: "手机", splitInternal: false, options: noDigits).text == " 手机")
+        assert(AutoSpaceFormatter.format(before: "看", inserting: "3D", splitInternal: false, options: noDigits).text == " 3D")
+
+        // Disabled mode
+        assert(AutoSpaceFormatter.format(before: "你好", inserting: "hello", splitInternal: false, options: allOff).text == "hello")
+
+        // Existing whitespace / newline / fullwidth space -> never double-space
+        assert(AutoSpaceFormatter.format(before: "", inserting: "hello", splitInternal: false, options: allOn).text == "hello")
+        assert(AutoSpaceFormatter.format(before: "你好 ", inserting: "hello", splitInternal: false, options: allOn).text == "hello")
+        assert(AutoSpaceFormatter.format(before: "你好\n", inserting: "hello", splitInternal: false, options: allOn).text == "hello")
+        assert(AutoSpaceFormatter.format(before: "你好\t", inserting: "hello", splitInternal: false, options: allOn).text == "hello")
+        assert(AutoSpaceFormatter.format(before: "你好\u{3000}", inserting: "hello", splitInternal: false, options: allOn).text == "hello")
+        assert(AutoSpaceFormatter.format(before: "你好", inserting: " hello", splitInternal: false, options: allOn).text == " hello")
+
+        // Fullwidth Chinese punctuation & halfwidth code/markdown punctuation -> never insert space
+        assert(AutoSpaceFormatter.format(before: "你好，", inserting: "world", splitInternal: false, options: allOn).text == "world")
+        assert(AutoSpaceFormatter.format(before: "hello", inserting: "，", splitInternal: false, options: allOn).text == "，")
+        assert(AutoSpaceFormatter.format(before: "（", inserting: "test", splitInternal: false, options: allOn).text == "test")
+        assert(AutoSpaceFormatter.format(before: "（test）", inserting: "的", splitInternal: false, options: allOn).text == "的")
+        assert(AutoSpaceFormatter.format(before: "函数", inserting: "(", splitInternal: false, options: allOn).text == "(")
+        assert(AutoSpaceFormatter.format(before: "[", inserting: "链接", splitInternal: false, options: allOn).text == "链接")
+        assert(AutoSpaceFormatter.format(before: "中/", inserting: "English", splitInternal: false, options: allOn).text == "English")
+        assert(AutoSpaceFormatter.format(before: "中文", inserting: "/", splitInternal: false, options: allOn).text == "/")
+        assert(AutoSpaceFormatter.format(before: "#", inserting: "话题", splitInternal: false, options: allOn).text == "话题")
+        assert(AutoSpaceFormatter.format(before: "`", inserting: "代码", splitInternal: false, options: allOn).text == "代码")
+        assert(AutoSpaceFormatter.format(before: "你好", inserting: "😀", splitInternal: false, options: allOn).text == "😀")
+
+        // URLs with CJK paths stay intact, while prose after ASCII URL gets space
+        assert(AutoSpaceFormatter.format(before: "https://zh.wikipedia.org/wiki/五笔", inserting: "86", splitInternal: false, options: allOn).text == "86")
+        assert(AutoSpaceFormatter.format(before: "https://example.com?q=五笔", inserting: "v2", splitInternal: false, options: allOn).text == "v2")
+        assert(AutoSpaceFormatter.format(before: "看 https://github.com/nameoverflow/formordo", inserting: "仓库", splitInternal: false, options: allOn).text == " 仓库")
+        assert(AutoSpaceFormatter.format(before: "https://example.com/docs/", inserting: "文档", splitInternal: false, options: allOn).text == "文档")
+
+        // Special language tokens & percent
+        assert(AutoSpaceFormatter.format(before: "用 C++", inserting: "写", splitInternal: false, options: allOn).text == " 写")
+        assert(AutoSpaceFormatter.format(before: "用 g++", inserting: "编译", splitInternal: false, options: allOn).text == " 编译")
+        assert(AutoSpaceFormatter.format(before: "用 C#", inserting: "开发", splitInternal: false, options: allOn).text == " 开发")
+        assert(AutoSpaceFormatter.format(before: "增长 50%", inserting: "左右", splitInternal: false, options: allOn).text == " 左右")
+        assert(AutoSpaceFormatter.format(before: "增长 50%", inserting: "左右", splitInternal: false, options: noDigits).text == "左右")
+        assert(AutoSpaceFormatter.format(before: "%50%", inserting: "测试", splitInternal: false, options: allOn).text == "测试")
+
+        // Internal mixed boundary (`我们A`) vs clipboard (`splitInternal: false`)
+        assert(AutoSpaceFormatter.format(before: "hello", inserting: "我们A", splitInternal: true, options: allOn).text == " 我们 A")
+        assert(AutoSpaceFormatter.format(before: "你好", inserting: "我们A", splitInternal: true, options: allOn).text == "我们 A")
+        assert(AutoSpaceFormatter.format(before: "使用", inserting: "iOS开发", splitInternal: false, options: allOn).text == " iOS开发")
+
+        // CJK Extension B surrogate pair + Latin extended
+        assert(AutoSpaceFormatter.format(before: "𠮷", inserting: "a", splitInternal: false, options: allOn).text == " a")
+        assert(AutoSpaceFormatter.format(before: "café", inserting: "店", splitInternal: false, options: allOn).text == " 店")
+
+        // Backspace-deleted auto-space suppression & tracker state tests (authoritative macOS & optimistic iOS)
+        var macTracker = AutoSpaceContextTracker()
+        assert(macTracker.prepareCommit("T", hostBefore: "", hostBeforeIsAuthoritative: true, splitInternal: true, options: allOn) == "T")
+        assert(macTracker.prepareCommit("恤", hostBefore: "T", hostBeforeIsAuthoritative: true, splitInternal: true, options: allOn) == " 恤")
+        // User deletes '恤', then deletes ' ' -> suppresses auto-space at "T"
+        macTracker.willDeleteBackward(hostBefore: "T 恤", hostBeforeIsAuthoritative: true)
+        macTracker.willDeleteBackward(hostBefore: "T ", hostBeforeIsAuthoritative: true)
+        assert(macTracker.prepareCommit("恤", hostBefore: "T", hostBeforeIsAuthoritative: true, splitInternal: true, options: allOn) == "恤")
+
+        // Deleting a single wrong letter keeps the space when typing replacement letter
+        var macTracker2 = AutoSpaceContextTracker()
+        assert(macTracker2.prepareCommit("a", hostBefore: "你好", hostBeforeIsAuthoritative: true, splitInternal: false, options: allOn) == " a")
+        macTracker2.willDeleteBackward(hostBefore: "你好 a", hostBeforeIsAuthoritative: true)
+        assert(macTracker2.prepareCommit("b", hostBefore: "你好 ", hostBeforeIsAuthoritative: true, splitInternal: false, options: allOn) == "b")
+
+        // Deleting a whole multi-key word (>2 commits) does NOT suppress space for a fresh word
+        var macTracker3 = AutoSpaceContextTracker()
+        assert(macTracker3.prepareCommit("a", hostBefore: "你好", hostBeforeIsAuthoritative: true, splitInternal: false, options: allOn) == " a")
+        macTracker3.recordPassthrough("b", hostBefore: "你好 a", hostBeforeIsAuthoritative: true)
+        macTracker3.recordPassthrough("c", hostBefore: "你好 ab", hostBeforeIsAuthoritative: true)
+        macTracker3.willDeleteBackward(hostBefore: "你好 abc", hostBeforeIsAuthoritative: true)
+        macTracker3.willDeleteBackward(hostBefore: "你好 ab", hostBeforeIsAuthoritative: true)
+        macTracker3.willDeleteBackward(hostBefore: "你好 a", hostBeforeIsAuthoritative: true)
+        macTracker3.willDeleteBackward(hostBefore: "你好 ", hostBeforeIsAuthoritative: true)
+        assert(macTracker3.prepareCommit("x", hostBefore: "你好", hostBeforeIsAuthoritative: true, splitInternal: false, options: allOn) == " x")
+
+        // iOS stale-XPC optimistic tracking: host stays stale across rapid commit + EN key + Backspace x2 + retype
+        var iosTracker = AutoSpaceContextTracker()
+        assert(iosTracker.prepareCommit("我们", hostBefore: "hello", hostBeforeIsAuthoritative: false, splitInternal: true, options: allOn) == " 我们")
+        // Host still reports "hello" (XPC lag!) when user immediately types 'a'
+        assert(iosTracker.prepareCommit("a", hostBefore: "hello", hostBeforeIsAuthoritative: false, splitInternal: false, options: allOn) == " a")
+        // Rapid Backspace x2 while host STILL reports "hello"
+        iosTracker.willDeleteBackward(hostBefore: "hello", hostBeforeIsAuthoritative: false)
+        iosTracker.willDeleteBackward(hostBefore: "hello", hostBeforeIsAuthoritative: false)
+        // Re-type 'a' while host catches up to "hello 我们"
+        iosTracker.reconcileExternalContext(hostBefore: "hello 我们")
+        assert(iosTracker.prepareCommit("a", hostBefore: "hello 我们", hostBeforeIsAuthoritative: false, splitInternal: false, options: allOn) == "a")
 
         // 5. Verify pure AppKit NativeCandidateContentView NEVER wraps lines even across narrow->wide transitions
         let candidateView = NativeCandidateContentView(frame: NSRect(x: 0, y: 0, width: 90, height: 30))
