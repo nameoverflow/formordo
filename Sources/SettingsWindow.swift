@@ -246,6 +246,12 @@ public struct SettingsRootView: View {
                     )
                     Divider()
                     toggleRow(
+                        title: "语言模型漏空格切分纠错",
+                        subtitle: "打完简码或三码字漏按空格续打下一字时，结合 Micro-RWKV-7 智能顶屏或提示切分候选",
+                        isOn: binding(\.missedSpaceCorrection)
+                    )
+                    Divider()
+                    toggleRow(
                         title: "触屏个人热区动态校准（EMA 自适应）",
                         subtitle: "根据历史触点残差微调每个按键判定中心（限幅 ±0.20 键宽），适配个人拇指习惯",
                         isOn: binding(\.touchHitboxAdapt)

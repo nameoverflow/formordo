@@ -536,6 +536,80 @@ impl DictView {
         collected
     }
 
+    /// Fast O(log B) check for whether `prefix` has at least one exact or longer-prefix match.
+    pub fn has_prefix_or_exact(&self, prefix: PackedCode, include_rare: bool) -> bool {
+        let (lo_code, hi_code) = prefix.prefix_range();
+        let mut b_idx = self.lower_bound_bucket(lo_code);
+        while b_idx < self.bucket_count {
+            let (c, start, count) = self.bucket_at(b_idx);
+            if c > hi_code {
+                break;
+            }
+            if include_rare {
+                if count > 0 {
+                    return true;
+                }
+            } else {
+                for i in start..start + count {
+                    if let Some(e) = self.entry_at(i, c) {
+                        if !e.is_ext_rare() {
+                            return true;
+                        }
+                    }
+                }
+            }
+            b_idx += 1;
+        }
+        false
+    }
+
+    /// Scan all buckets under `prefix` (including exact matches) and return the top `limit`
+    /// highest-weight entries across the entire prefix range (never truncated alphabetically).
+    pub fn top_prefix_entries(
+        &self,
+        prefix: PackedCode,
+        limit: usize,
+        include_rare: bool,
+    ) -> Vec<DictEntryRef<'_>> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let (lo_code, hi_code) = prefix.prefix_range();
+        let mut b_idx = self.lower_bound_bucket(lo_code);
+        let mut best: Vec<DictEntryRef<'_>> = Vec::with_capacity(limit + 1);
+        let mut floor_wt: u32 = 0;
+
+        while b_idx < self.bucket_count {
+            let (c, start, count) = self.bucket_at(b_idx);
+            if c > hi_code {
+                break;
+            }
+            let scan_end = (start + count).min(start + 2);
+            for i in start..scan_end {
+                if let Some(e) = self.entry_at(i, c) {
+                    if !include_rare && e.is_ext_rare() {
+                        continue;
+                    }
+                    if best.len() == limit && e.weight <= floor_wt {
+                        continue;
+                    }
+                    let pos = best.partition_point(|x| x.weight > e.weight);
+                    if pos < limit {
+                        best.insert(pos, e);
+                        if best.len() > limit {
+                            best.pop();
+                        }
+                        if best.len() == limit {
+                            floor_wt = best.last().unwrap().weight;
+                        }
+                    }
+                }
+            }
+            b_idx += 1;
+        }
+        best
+    }
+
     pub fn char_meta(&self, ch: char) -> Option<CharMeta> {
         let target = ch as u32;
         let b = self.buf.as_slice();

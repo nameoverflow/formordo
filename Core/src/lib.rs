@@ -515,12 +515,47 @@ mod tests {
         let mut cfg = WubiConfig::default();
         assert!(cfg.auto_space_zh_en);
         assert!(cfg.auto_space_digits);
+        assert!(cfg.typo.missed_space_correction);
         cfg.auto_space_zh_en = true;
         cfg.auto_space_digits = false;
+        cfg.typo.missed_space_correction = false;
         let toml = cfg.to_toml_string();
         let parsed = WubiConfig::from_toml_str(&toml);
         assert!(parsed.auto_space_zh_en);
         assert!(!parsed.auto_space_digits);
+        assert!(!parsed.typo.missed_space_correction);
+    }
+
+    #[test]
+    fn missed_space_empty_split_and_toggle() {
+        let mut engine = WubiEngine::new(WubiConfig::default());
+        engine.load_dict(WubiSchema::Wubi86, build_sample_dict_86());
+        engine.set_aux(build_sample_aux());
+
+        // Type 3-code `wun` ("们") without Space, followed by `q` ("我") -> `wunq` is empty!
+        // Missed-space decoder smart-pushes "们" and keeps "q" composing.
+        for ch in ['w', 'u', 'n'] {
+            let out = engine.handle_key_event(0, Some(ch), false, 100);
+            assert!(out.commit_text.is_empty());
+        }
+        let out4 = engine.handle_key_event(0, Some('q'), false, 160);
+        assert!(!out4.bell, "missed-space split should avoid empty-code bell");
+        assert_eq!(out4.commit_text, "们");
+        assert_eq!(out4.preedit, "q");
+        let out_sp = engine.handle_key_event(KEY_SPACE, Some(' '), false, 220);
+        assert_eq!(out_sp.commit_text, "我");
+
+        // Disabling `missed_space_correction` restores blocking behavior on `wunq`
+        let mut cfg = engine.config.clone();
+        cfg.typo.missed_space_correction = false;
+        engine.set_config(cfg);
+        engine.clear_composition();
+        for ch in ['w', 'u', 'n'] {
+            let _ = engine.handle_key_event(0, Some(ch), false, 300);
+        }
+        let blocked = engine.handle_key_event(0, Some('q'), false, 360);
+        assert!(blocked.bell);
+        assert_eq!(blocked.preedit, "wun");
     }
 
     #[test]

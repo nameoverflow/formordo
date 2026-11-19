@@ -175,4 +175,47 @@ fn real_dicts_latency_schemas_and_typo_correction() {
     assert!(engine.predict_next_words(8).iter().take(3).any(|w| w == "型"));
     engine.set_recent_context("输入");
     assert!(engine.predict_next_words(8).iter().take(4).any(|w| w == "法"));
+
+    // Test LM-guided missed-space correction on real Wubi86 + Micro-RWKV-7:
+    // 1) 3-code + 4-code (empty at key #4): "周末我想" + 去(fcu) + [no space] + 爬山(rhmm) -> "去爬山"
+    engine.clear_composition();
+    engine.set_recent_context("这个周末我想");
+    let mut got = String::new();
+    for (i, ch) in "fcurhmm".chars().enumerate() {
+        let out = engine.handle_key_event(0, Some(ch), false, 2000 + i as u64 * 60);
+        assert!(!out.bell, "unexpected bell on fcurhmm at {}", ch);
+        got.push_str(&out.commit_text);
+    }
+    if engine.is_composing() {
+        let out = engine.handle_key_event(wubi_core::engine::KEY_SPACE, Some(' '), false, 2500);
+        got.push_str(&out.commit_text);
+    }
+    assert_eq!(got, "去爬山", "expected empty-collision missed-space rescue '去爬山', got '{}'", got);
+
+    // 2) 3-code + 4-code (colliding 4-code exact match at key #4!):
+    //    "我们一起" + 去(fcu) + [no space] + 吃饭(ktqn) -> `fcuk` collides in Wubi86, resolved at Key #5!
+    engine.clear_composition();
+    engine.set_recent_context("今天天气真好我们一起");
+    let mut got2 = String::new();
+    for (i, ch) in "fcuktqn".chars().enumerate() {
+        let out = engine.handle_key_event(0, Some(ch), false, 3000 + i as u64 * 60);
+        got2.push_str(&out.commit_text);
+    }
+    if engine.is_composing() {
+        let out = engine.handle_key_event(wubi_core::engine::KEY_SPACE, Some(' '), false, 3600);
+        got2.push_str(&out.commit_text);
+    }
+    assert_eq!(got2, "去吃饭", "expected colliding missed-space rescue '去吃饭', got '{}'", got2);
+
+    // 3) 3-code + 1-code: "你觉得这家" + 店(yhk) + [no space] + 的(r) + Space -> "店的"
+    engine.clear_composition();
+    engine.set_recent_context("你觉得这家");
+    let mut got3 = String::new();
+    for (i, ch) in "yhkr".chars().enumerate() {
+        let out = engine.handle_key_event(0, Some(ch), false, 4000 + i as u64 * 60);
+        got3.push_str(&out.commit_text);
+    }
+    let out3_sp = engine.handle_key_event(wubi_core::engine::KEY_SPACE, Some(' '), false, 4300);
+    got3.push_str(&out3_sp.commit_text);
+    assert_eq!(got3, "店的", "expected 3+1 missed-space rescue '店的', got '{}'", got3);
 }

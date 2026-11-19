@@ -135,6 +135,8 @@ pub struct TypoConfig {
     pub suggest_threshold: f32,
     /// 纠错救回项是否抑制「四码唯一自动上屏」，防止误触把错字自动顶上屏
     pub suppress_auto_commit_on_correction: bool,
+    /// 漏空格切分纠错（基于语言模型识别三码/二码/一码字后漏按空格，自动顶屏或给出双字切分候选）
+    pub missed_space_correction: bool,
 }
 
 impl Default for TypoConfig {
@@ -145,6 +147,7 @@ impl Default for TypoConfig {
             promote_threshold: 0.82,
             suggest_threshold: 0.30,
             suppress_auto_commit_on_correction: true,
+            missed_space_correction: true,
         }
     }
 }
@@ -259,7 +262,8 @@ impl WubiConfig {
                 "touch_hitbox_adapt = {}\n",
                 "promote_threshold = {:.2}\n",
                 "suggest_threshold = {:.2}\n",
-                "suppress_auto_commit_on_correction = {}\n"
+                "suppress_auto_commit_on_correction = {}\n",
+                "missed_space_correction = {}\n"
             ),
             self.schema.as_tag(),
             self.page_size,
@@ -286,6 +290,7 @@ impl WubiConfig {
             self.typo.promote_threshold,
             self.typo.suggest_threshold,
             self.typo.suppress_auto_commit_on_correction,
+            self.typo.missed_space_correction,
         )
     }
 
@@ -359,6 +364,9 @@ impl WubiConfig {
                 }
                 (_, "suppress_auto_commit_on_correction") => {
                     cfg.typo.suppress_auto_commit_on_correction = parse_bool(val)
+                }
+                (_, "missed_space_correction") => {
+                    cfg.typo.missed_space_correction = parse_bool(val)
                 }
                 _ => {}
             }

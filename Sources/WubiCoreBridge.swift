@@ -209,6 +209,7 @@ public struct WubiPreferences: Equatable, Sendable {
     public var promoteThreshold: Double = 0.82
     public var suggestThreshold: Double = 0.30
     public var suppressAutoCommitOnCorrection: Bool = true
+    public var missedSpaceCorrection: Bool = true
 
     public init() {}
 
@@ -254,6 +255,7 @@ public struct WubiPreferences: Equatable, Sendable {
         promote_threshold = \(String(format: "%.2f", promoteThreshold))
         suggest_threshold = \(String(format: "%.2f", suggestThreshold))
         suppress_auto_commit_on_correction = \(suppressAutoCommitOnCorrection)
+        missed_space_correction = \(missedSpaceCorrection)
         """
     }
 
@@ -330,6 +332,8 @@ public struct WubiPreferences: Equatable, Sendable {
                 p.suggestThreshold = min(0.85, max(0.10, Double(val) ?? 0.30))
             case (_, "suppress_auto_commit_on_correction"):
                 p.suppressAutoCommitOnCorrection = boolVal
+            case (_, "missed_space_correction"):
+                p.missedSpaceCorrection = boolVal
             default:
                 break
             }

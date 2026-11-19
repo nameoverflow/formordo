@@ -310,6 +310,8 @@ public struct IOSHostRootView: View {
                         Divider()
                         iosToggleRow("纠错项抑制四码盲目上屏", sub: "非精确救回项留待空格或第 5 码确认，防顶错字", isOn: binding(\.suppressAutoCommitOnCorrection))
                         Divider()
+                        iosToggleRow("语言模型漏空格切分纠错", sub: "简码/三码字漏按空格续打时智能顶屏切分，减少空码截停与误上屏", isOn: binding(\.missedSpaceCorrection))
+                        Divider()
                         iosToggleRow("个人拇指热区 EMA 自适应", sub: "确认选词后微调每键判定中心（限幅 ±0.20 键宽）", isOn: binding(\.touchHitboxAdapt))
                         Divider()
                         VStack(alignment: .leading, spacing: 4) {
