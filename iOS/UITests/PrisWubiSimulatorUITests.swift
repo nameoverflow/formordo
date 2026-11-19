@@ -419,6 +419,14 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         XCTAssertEqual(app.textFields.firstMatch.value as? String, "我。5们")
         five.tap()
         XCTAssertEqual(app.textFields.firstMatch.value as? String, "我。5t们")
+        tapNorm(app, dx: 0.935, dy: 0.837) // erase marked t
+        tapNorm(app, dx: 0.06, dy: 0.895) // 123
+        tapNorm(app, dx: 0.15, dy: 0.720) // '2' (stays on 123)
+        tapNorm(app, dx: 0.05, dy: 0.778) // '-' (stays on 123)
+        tapNorm(app, dx: 0.25, dy: 0.720) // '3' (stays on 123)
+        tapNorm(app, dx: 0.78, dy: 0.837) // '.' (stays on 123)
+        tapNorm(app, dx: 0.35, dy: 0.720) // '4' (stays on 123)
+        XCTAssertEqual(app.textFields.firstMatch.value as? String, "我。52-3.4们")
 
     }
 

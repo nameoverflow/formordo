@@ -91,13 +91,14 @@ public struct IOSKeySpec: Identifiable, Equatable {
 }
 
 /// Exact iOS 26 native Wubi keyboard geometric & state engine, calibrated 1:1 from iOS 26 metrics:
-/// - Uniform pure-white rounded-squircle keycaps (`cornerRadius = 8.5pt`, continuous) in Light mode
+/// - Uniform pure-white rounded-squircle keycaps (`cornerRadius = 7.8pt`, continuous) in Light mode
 /// - Lowercase key legends (`q w e r t y...`) by default, uppercase only when Shift/CapsLock active
 /// - Ergonomic thumb downward bias (`2.6pt`) + Wubi dictionary valid-next-key dynamic hitbox expansion
 public struct IOSKeyboardLayoutEngine: Equatable {
-    public static let keyCornerRadius: CGFloat = 8.5
+    public static let keyCornerRadius: CGFloat = 7.8
     public static let trayTopCornerRadius: CGFloat = 26.0
-    public static let candidateBarHeight: CGFloat = 44.0
+    public static let candidateBarHeight: CGFloat = 53.0
+    public static let landscapeCandidateBarHeight: CGFloat = 40.0
     /// Thumbs naturally strike ~2.6pt below visual keycap center on handheld phones.
     public static let ergonomicThumbYBias: CGFloat = 2.6
 
@@ -175,14 +176,14 @@ public struct IOSKeyboardLayoutEngine: Equatable {
         let h = max(168, size.height)
         let isLandscape = w > 540
 
-        // Exact iOS 26 proportions (`440pt` -> outerMargin `6.67pt`, gapX `6.67pt`, keyW `36.67pt`, pitchX `43.33pt`).
-        // Give Row 3 (`Space`/`123`/`Return`) a generous `6.5pt` bottom catch-margin inside the `219pt` XPC viewport
-        // while keeping `keyH = 45.0pt` (`219 - 2.5 - 6.5 - 10*3 = 180 = 4 * 45`) and total height `263pt` unchanged!
+        // Exact iOS 26 proportions (`440pt` -> outerMargin `6.67pt`, gapX `6.00pt`, keyW `37.27pt`, pitchX `43.27pt`,
+        // `keyH = 45.0pt`, `rowGap = 11.0pt`, total `53 + 220 = 273pt` matching native `608..881pt` tray).
+        // `bottomPad = 7.0pt` preserves generous bottom catch-margin inside the `220pt` XPC key canvas.
         let outerX: CGFloat = isLandscape ? 8.0 : round(w * (20.0 / 1320.0) * 3.0) / 3.0
-        let gapX: CGFloat = isLandscape ? 7.0 : round(w * (20.0 / 1320.0) * 3.0) / 3.0
-        let topPad: CGFloat = isLandscape ? 2.5 : 2.5
-        let bottomPad: CGFloat = isLandscape ? 4.5 : 6.5
-        let rowGap: CGFloat = isLandscape ? 8.0 : 10.0
+        let gapX: CGFloat = isLandscape ? 6.5 : round(w * (18.0 / 1320.0) * 3.0) / 3.0
+        let topPad: CGFloat = isLandscape ? 2.0 : 0.0
+        let bottomPad: CGFloat = isLandscape ? 4.5 : 7.0
+        let rowGap: CGFloat = isLandscape ? 8.0 : 11.0
 
         let usableH = h - topPad - bottomPad - rowGap * 3.0
         let keyH = max(34.0, floor(usableH / 4.0))
@@ -233,7 +234,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
             }
 
             // Row 2: [⇧] + z x c v b n m (aligned with colRow1X[1..7] = s..k!) + [⌫]
-            let sideKeyW = stdKeyW * 1.345 // 49.33pt on 440pt width
+            let sideKeyW = stdKeyW * 1.342 // 49.33pt on 440pt width
             let shiftSym: String
             switch shiftState {
             case .lower: shiftSym = "shift"
@@ -280,7 +281,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                 : ["-", "/", "：", "；", "（", "）", "￥", "@", "“", "”"]
             appendTenRow(r1, rowIdx: 1, rowY: rowY[1], outerX: outerX, pitchX: pitchX, keyW: stdKeyW, keyH: keyH, into: &specs)
 
-            let sideKeyW = stdKeyW * 1.345
+            let sideKeyW = stdKeyW * 1.342
             specs.append(
                 IOSKeySpec(
                     id: "P_symbols",
@@ -291,7 +292,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
             )
             let puncMid = asciiMode
                 ? [".", ",", "?", "!", "'"]
-                : ["。", "，", "、", "？", "！"]
+                : ["。", "，", "、", "？", "！", "."]
             appendSpanSymbols(
                 puncMid,
                 rowY: rowY[2],
@@ -320,7 +321,7 @@ public struct IOSKeyboardLayoutEngine: Equatable {
                 : ["——", "\\", "|", "～", "《", "》", "【", "】", "…", "·"]
             appendTenRow(r1, rowIdx: 1, rowY: rowY[1], outerX: outerX, pitchX: pitchX, keyW: stdKeyW, keyH: keyH, into: &specs)
 
-            let sideKeyW = stdKeyW * 1.345
+            let sideKeyW = stdKeyW * 1.342
             specs.append(
                 IOSKeySpec(
                     id: "P_numbers",
@@ -583,6 +584,26 @@ public struct IOSKeyboardLayoutEngine: Equatable {
             }
         }
         return best
+    }
+
+    /// Native iOS 26 Chinese keyboard stay-vs-return rules for `123` and `#+=` planes:
+    /// - On `123`: digits (`0-9`) and numeric/time/currency/path connectors (`- / : ： . ￥ ¥ $`) stay on `123`;
+    ///   sentence punctuation, quotes, brackets, `@`, `&`, `;` return to `.letters`.
+    /// - On `#+=`: `~`, `～`, `…` stay on `#+=`; brackets, math, and punctuation symbols return to `.letters`.
+    public static func shouldReturnToLettersAfterSymbol(_ sym: String, on plane: IOSKeyPlane) -> Bool {
+        if sym.allSatisfy(\.isNumber) {
+            return false
+        }
+        switch plane {
+        case .numbers:
+            let staySet: Set<String> = ["-", "/", ":", "：", ".", "￥", "¥", "$"]
+            return !staySet.contains(sym)
+        case .symbols:
+            let staySet: Set<String> = ["~", "～", "…"]
+            return !staySet.contains(sym)
+        case .letters:
+            return false
+        }
     }
 
     private func formatLetter(_ ascii: UInt8) -> String {

@@ -12,7 +12,7 @@ struct IOSKeyboardTests {
 
         let qKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "q")) })!
         assert(qKey.primaryLabel == "q", "Expected lowercase 'q' in iOS 26 default mode, got \(qKey.primaryLabel)")
-        assert(abs(qKey.frame.width - 36.67) < 0.25, "Expected ~36.67pt key width on 440pt canvas, got \(qKey.frame.width)")
+        assert(abs(qKey.frame.width - 37.27) < 0.25, "Expected ~37.27pt key width on 440pt canvas, got \(qKey.frame.width)")
 
         // Verify column-for-column invariants: `z` == `s`, `Space` == `d..j`, `Return` == `k..p`!
         let sKey = snap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "s")) })!
@@ -48,14 +48,29 @@ struct IOSKeyboardTests {
         layout.tapShift(at: 11.0)
         assert(layout.shiftState == .lower)
 
-        // 4. Test Numbers (123) and Symbols (#+=) planes
+        // 4. Test Numbers (123) and Symbols (#+=) planes + native stay-vs-return rules
         layout.switchPlane(.numbers)
-        let numSnap = layout.computeLayout(in: CGSize(width: 440, height: 225))
+        let numSnap = layout.computeLayout(in: CGSize(width: 440, height: 220))
         assert(numSnap.keys.contains(where: { $0.primaryLabel == "1" }))
         assert(numSnap.keys.contains(where: { $0.primaryLabel == "，" }))
+        assert(numSnap.keys.contains(where: { $0.primaryLabel == "." }))
+        assert(!IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("5", on: .numbers))
+        assert(!IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("-", on: .numbers))
+        assert(!IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("/", on: .numbers))
+        assert(!IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("：", on: .numbers))
+        assert(!IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol(".", on: .numbers))
+        assert(!IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("￥", on: .numbers))
+        assert(IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("，", on: .numbers))
+        assert(IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("。", on: .numbers))
+        assert(IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("（", on: .numbers))
+        assert(IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("；", on: .numbers))
         layout.switchPlane(.symbols)
-        let symSnap = layout.computeLayout(in: CGSize(width: 440, height: 225))
+        let symSnap = layout.computeLayout(in: CGSize(width: 440, height: 220))
         assert(symSnap.keys.contains(where: { $0.primaryLabel == "《" }))
+        assert(!IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("～", on: .symbols))
+        assert(!IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("…", on: .symbols))
+        assert(IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("《", on: .symbols))
+        assert(IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol("+", on: .symbols))
         layout.switchPlane(.letters)
 
         // 5. Test Spacebar Trackpad Cursor Accumulator
@@ -129,26 +144,28 @@ struct IOSKeyboardTests {
         let sacredHit = IOSKeyboardLayoutEngine.hitTest(point: interiorInsideI, in: snap, validNextMask: afterTrw.validNextMask)
         assert(sacredHit?.kind == .letter(UInt8(ascii: "i")), "Expected sacred keycap core to preserve tap inside 'i', got \(String(describing: sacredHit?.kind))")
 
-        // 10. Verify portrait 219pt canvas gives >= 6.0pt live catch-margin below Spacebar inside XPC viewport,
+        // 10. Verify portrait 220pt canvas (`273pt - 53pt` ribbon) matches native 45pt keyH + 11pt rowGap + 7.0pt catch margin,
         //     and outer-margin corner tap beside 'z' never mutates to 'a' in Rust `push_touch_letter`!
-        let snap219 = layout.computeLayout(in: CGSize(width: 440, height: 219))
-        let space219 = snap219.keys.first(where: { $0.kind == .space })!
-        assert(219.0 - space219.frame.maxY >= 6.0, "Expected >= 6.0pt bottom catch margin below Spacebar, got \(219.0 - space219.frame.maxY)")
-        let bottomRimSpaceTap = CGPoint(x: space219.frame.midX, y: 218.5)
-        let bottomSpaceHit = IOSKeyboardLayoutEngine.hitTest(point: bottomRimSpaceTap, in: snap219, validNextMask: kState.validNextMask)
-        assert(bottomSpaceHit?.kind == .space, "Expected bottom-rim tap at y=218.5 to hit Spacebar")
+        let snap220 = layout.computeLayout(in: CGSize(width: 440, height: 220))
+        let space220 = snap220.keys.first(where: { $0.kind == .space })!
+        let q220 = snap220.keys.first(where: { $0.kind == .letter(UInt8(ascii: "q")) })!
+        assert(abs(q220.frame.height - 45.0) < 0.01, "Expected 45pt key height, got \(q220.frame.height)")
+        assert(220.0 - space220.frame.maxY >= 6.5, "Expected >= 6.5pt bottom catch margin below Spacebar, got \(220.0 - space220.frame.maxY)")
+        let bottomRimSpaceTap = CGPoint(x: space220.frame.midX, y: 219.5)
+        let bottomSpaceHit = IOSKeyboardLayoutEngine.hitTest(point: bottomRimSpaceTap, in: snap220, validNextMask: kState.validNextMask)
+        assert(bottomSpaceHit?.kind == .space, "Expected bottom-rim tap at y=219.5 to hit Spacebar")
 
         bridge.clearComposition()
         bridge.setKeyLayout(
-            centers52: snap219.centers52,
-            originX: snap219.originX,
-            originY: snap219.originY,
-            pitchX: snap219.pitchX,
-            pitchY: snap219.pitchY
+            centers52: snap220.centers52,
+            originX: snap220.originX,
+            originY: snap220.originY,
+            pitchX: snap220.pitchX,
+            pitchY: snap220.pitchY
         )
-        let z219 = snap219.keys.first(where: { $0.kind == .letter(UInt8(ascii: "z")) })!
-        let zCorner = CGPoint(x: z219.frame.minX - 9.0, y: z219.frame.minY + 3.0)
-        let zHit = IOSKeyboardLayoutEngine.hitTest(point: zCorner, in: snap219)
+        let z220 = snap220.keys.first(where: { $0.kind == .letter(UInt8(ascii: "z")) })!
+        let zCorner = CGPoint(x: z220.frame.minX - 9.0, y: z220.frame.minY + 3.0)
+        let zHit = IOSKeyboardLayoutEngine.hitTest(point: zCorner, in: snap220)
         assert(zHit?.kind == .letter(UInt8(ascii: "z")), "Expected gutter tap beside 'z' to hit 'z'")
         let zOut = bridge.pushTouch(reportedAscii: UInt8(ascii: "z"), x: Float(zCorner.x), y: Float(zCorner.y), isNormalized: false, timestampMs: 4000)
         assert(zOut.preedit == "z", "Expected Rust view-space touch to preserve UI hit-tested 'z', got '\(zOut.preedit)'")

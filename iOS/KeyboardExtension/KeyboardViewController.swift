@@ -13,6 +13,7 @@ public final class KeyboardViewController: UIInputViewController {
     private let calloutView = IOSKeyCalloutView()
 
     private var heightConstraint: NSLayoutConstraint?
+    private var ribbonHeightConstraint: NSLayoutConstraint?
     private var saveUserDataTimer: Timer?
     private var backspaceTimer: Timer?
     private var backspaceHoldStart: TimeInterval = 0
@@ -35,6 +36,11 @@ public final class KeyboardViewController: UIInputViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
         setupViews()
+        if #available(iOS 17.0, *) {
+            registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: KeyboardViewController, _) in
+                self.syncProxyTraits()
+            }
+        }
         syncEngineToUI()
     }
 
@@ -46,12 +52,19 @@ public final class KeyboardViewController: UIInputViewController {
         super.viewWillAppear(animated)
         feedback.prepare()
         bridge.loadConfigAndUser()
+        applyDesiredTrayDimensions()
         syncEngineToUI()
     }
 
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        applyDesiredTrayDimensions()
         disableTouchDelayOnContainerGestures()
+    }
+
+    public override func updateViewConstraints() {
+        super.updateViewConstraints()
+        applyDesiredTrayDimensions()
     }
 
     public override func viewWillDisappear(_ animated: Bool) {
@@ -68,13 +81,30 @@ public final class KeyboardViewController: UIInputViewController {
 
     public override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        let isLandscape = view.bounds.width > 540
-        // 44pt candidate ribbon + 219pt 4-row keyboard (`keyH = 45pt`) = 263pt matching iOS 26 native height
-        let targetH: CGFloat = isLandscape ? 204 : 263
+        applyDesiredTrayDimensions()
+        refreshKeyboardLayout()
+    }
+
+    private func applyDesiredTrayDimensions() {
+        let width = view.bounds.width > 10 ? view.bounds.width : UIScreen.main.bounds.width
+        let isLandscape = width > 540
+        // 53pt candidate ribbon + 220pt 4-row keyboard (`keyH = 45pt`, `rowGap = 11pt`) = 273pt matching iOS 26 native height (`608..881pt`).
+        let targetH: CGFloat = isLandscape ? 204 : 273
+        let targetRibbonH: CGFloat = isLandscape
+            ? IOSKeyboardLayoutEngine.landscapeCandidateBarHeight
+            : IOSKeyboardLayoutEngine.candidateBarHeight
+        var changed = false
         if heightConstraint?.constant != targetH {
             heightConstraint?.constant = targetH
+            changed = true
         }
-        refreshKeyboardLayout()
+        if ribbonHeightConstraint?.constant != targetRibbonH {
+            ribbonHeightConstraint?.constant = targetRibbonH
+            changed = true
+        }
+        if changed {
+            inputView?.setNeedsUpdateConstraints()
+        }
     }
 
     public override func textDidChange(_ textInput: UITextInput?) {
@@ -109,9 +139,11 @@ public final class KeyboardViewController: UIInputViewController {
         inputView.addSubview(expandedGrid)
         inputView.addSubview(calloutView)
 
-        let hc = inputView.heightAnchor.constraint(equalToConstant: 263)
+        let hc = inputView.heightAnchor.constraint(equalToConstant: 273)
         hc.priority = UILayoutPriority(999)
         self.heightConstraint = hc
+        let rhc = ribbonView.heightAnchor.constraint(equalToConstant: IOSKeyboardLayoutEngine.candidateBarHeight)
+        self.ribbonHeightConstraint = rhc
 
         NSLayoutConstraint.activate([
             hc,
@@ -123,7 +155,7 @@ public final class KeyboardViewController: UIInputViewController {
             ribbonView.topAnchor.constraint(equalTo: inputView.topAnchor),
             ribbonView.leadingAnchor.constraint(equalTo: inputView.leadingAnchor),
             ribbonView.trailingAnchor.constraint(equalTo: inputView.trailingAnchor),
-            ribbonView.heightAnchor.constraint(equalToConstant: IOSKeyboardLayoutEngine.candidateBarHeight),
+            rhc,
 
             keyCanvas.topAnchor.constraint(equalTo: ribbonView.bottomAnchor),
             keyCanvas.leadingAnchor.constraint(equalTo: inputView.leadingAnchor),
@@ -352,7 +384,9 @@ public final class KeyboardViewController: UIInputViewController {
         case .symbol(let sym):
             commitPendingFirstIfComposing()
             textDocumentProxy.insertText(sym)
-            if !sym.allSatisfy(\.isNumber) { layoutEngine.switchPlane(.letters) }
+            if IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol(sym, on: layoutEngine.plane) {
+                layoutEngine.switchPlane(.letters)
+            }
             syncEngineToUI()
 
         case .shift:

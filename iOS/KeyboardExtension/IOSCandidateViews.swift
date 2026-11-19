@@ -59,11 +59,10 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     private let clipContainer = UIView()
     private let contentTrack = UIView()
     private let edgeFadeMask = CAGradientLayer()
-    private let divider = UIView()
     private let chevronBtn = UIButton(type: .system)
     private var slotControls: [IOSRibbonSlotControl] = []
 
-    private var clipTrailingToDivider: NSLayoutConstraint!
+    private var clipTrailingToChevron: NSLayoutConstraint!
     private var clipTrailingToFull: NSLayoutConstraint!
 
     private var contentWidth: CGFloat = 0
@@ -81,15 +80,15 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// Pass touches in the bottom `7pt` strip (`y = 37..44`, below candidate glyphs) and in the lower half
-    /// (`y = 20..44`) of unoccupied trailing candidate-bar space straight through to Row 0 (`q..p`),
-    /// while preserving full `0..44pt` hit area on `chevronBtn` and eliminating inter-slot dead gaps.
+    /// Pass touches in the bottom `8pt` strip (below candidate glyphs) and in the lower half
+    /// of unoccupied trailing candidate-bar space straight through to Row 0 (`q..p`),
+    /// while preserving full hit area on `chevronBtn` and eliminating inter-slot dead gaps.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard bounds.contains(point) else { return false }
-        if !chevronBtn.isHidden && point.x >= divider.frame.minX - 4.0 {
+        if !chevronBtn.isHidden && point.x >= chevronBtn.frame.minX - 4.0 {
             return true
         }
-        if point.y > bounds.height - 7.0 {
+        if point.y > bounds.height - 8.0 {
             return false
         }
         let availW = clipContainer.bounds.width
@@ -100,7 +99,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
                 .filter { !$0.isHidden }
                 .map { $0.frame.maxX - self.scrollOffsetX }
                 .max() ?? 0
-            if point.x > maxVisibleMaxX + 10.0 && point.y >= 20.0 {
+            if point.x > maxVisibleMaxX + 10.0 && point.y >= bounds.height * 0.45 {
                 return false
             }
         }
@@ -149,17 +148,15 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         pan.cancelsTouchesInView = true
         clipContainer.addGestureRecognizer(pan)
 
-        divider.translatesAutoresizingMaskIntoConstraints = false
         chevronBtn.translatesAutoresizingMaskIntoConstraints = false
-        let cfg = UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+        let cfg = UIImage.SymbolConfiguration(pointSize: 15.5, weight: .medium)
         chevronBtn.setImage(UIImage(systemName: "chevron.down", withConfiguration: cfg), for: .normal)
         chevronBtn.addTarget(self, action: #selector(handleChevron), for: .touchUpInside)
 
         addSubview(clipContainer)
-        addSubview(divider)
         addSubview(chevronBtn)
 
-        clipTrailingToDivider = clipContainer.trailingAnchor.constraint(equalTo: divider.leadingAnchor)
+        clipTrailingToChevron = clipContainer.trailingAnchor.constraint(equalTo: chevronBtn.leadingAnchor)
         clipTrailingToFull = clipContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6)
 
         NSLayoutConstraint.activate([
@@ -168,15 +165,10 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
             clipContainer.topAnchor.constraint(equalTo: topAnchor),
             clipContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            divider.trailingAnchor.constraint(equalTo: chevronBtn.leadingAnchor),
-            divider.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 1),
-            divider.widthAnchor.constraint(equalToConstant: 0.65),
-            divider.heightAnchor.constraint(equalToConstant: 20),
-
-            chevronBtn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+            chevronBtn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             chevronBtn.topAnchor.constraint(equalTo: topAnchor),
             chevronBtn.bottomAnchor.constraint(equalTo: bottomAnchor),
-            chevronBtn.widthAnchor.constraint(equalToConstant: 44),
+            chevronBtn.widthAnchor.constraint(equalToConstant: 42),
         ])
 
         ensureSlotCapacity(10)
@@ -228,8 +220,8 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     override func layoutSubviews() {
         super.layoutSubviews()
         let barH = clipContainer.bounds.height
-        let slotH = max(28.0, barH - 9.0)
-        let slotY = floor((barH - slotH) * 0.5) + 0.5
+        let slotH = min(34.0, max(28.0, barH - 10.0))
+        let slotY = floor((barH - slotH) * 0.5)
 
         // Adaptive spacing when idle starter words slightly exceed narrower screens (e.g. 393/402pt)
         let visibleSlots = slotControls.filter { !$0.isHidden }
@@ -305,7 +297,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     }
 
     func setExpanded(_ expanded: Bool) {
-        let cfg = UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+        let cfg = UIImage.SymbolConfiguration(pointSize: 15.5, weight: .medium)
         chevronBtn.setImage(
             UIImage(systemName: expanded ? "chevron.up" : "chevron.down", withConfiguration: cfg),
             for: .normal
@@ -329,11 +321,9 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
         let textCol: UIColor = dark ? .white : .black
         let subtleCol: UIColor = dark ? UIColor(white: 0.64, alpha: 1.0) : UIColor(white: 0.44, alpha: 1.0)
-        divider.backgroundColor = (dark ? UIColor.white : UIColor.black).withAlphaComponent(0.14)
         chevronBtn.tintColor = textCol
         chevronBtn.isHidden = isEmpty
-        divider.isHidden = isEmpty
-        clipTrailingToDivider.isActive = !isEmpty
+        clipTrailingToChevron.isActive = !isEmpty
         clipTrailingToFull.isActive = isEmpty
 
         UIView.performWithoutAnimation {
@@ -347,7 +337,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
                         let attr = NSAttributedString(
                             string: words[i],
                             attributes: [
-                                .font: UIFont.systemFont(ofSize: 18, weight: .regular),
+                                .font: UIFont.systemFont(ofSize: 19.5, weight: .regular),
                                 .foregroundColor: textCol,
                             ]
                         )
@@ -368,7 +358,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
                         let attr = NSMutableAttributedString(
                             string: item.text,
                             attributes: [
-                                .font: UIFont.systemFont(ofSize: 18.5, weight: i == 0 ? .medium : .regular),
+                                .font: UIFont.systemFont(ofSize: 19.5, weight: i == 0 ? .medium : .regular),
                                 .foregroundColor: textCol,
                             ]
                         )
@@ -471,17 +461,14 @@ final class IOSExpandedCandidateView: UIView {
 
     func reload(candidates: [WubiCandidateItem], dark: Bool) {
         backgroundColor = .clear
-        let cellBg = dark ? UIColor(red: 0.28, green: 0.28, blue: 0.30, alpha: 1.0) : UIColor.white
+        let cellBg = dark ? UIColor(white: 1.0, alpha: 0.175) : UIColor.white
         let textCol = dark ? UIColor.white : UIColor.black
 
         for case let btn as UIButton in railStack.arrangedSubviews {
             btn.backgroundColor = cellBg
             btn.tintColor = textCol
             btn.setTitleColor(textCol, for: .normal)
-            btn.layer.shadowColor = UIColor.black.cgColor
-            btn.layer.shadowOffset = CGSize(width: 0, height: 0.8)
-            btn.layer.shadowRadius = 0.6
-            btn.layer.shadowOpacity = dark ? 0.30 : 0.12
+            btn.layer.shadowOpacity = 0
         }
 
         gridStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -491,23 +478,20 @@ final class IOSExpandedCandidateView: UIView {
             let row = UIStackView()
             row.axis = .horizontal
             row.distribution = .fillEqually
-            row.spacing = 7
+            row.spacing = 6
             for c in 0..<cols {
                 if idx + c < candidates.count {
                     let item = candidates[idx + c]
                     let absIdx = idx + c
                     let btn = UIButton(type: .system)
                     btn.backgroundColor = cellBg
-                    btn.layer.cornerRadius = 8.5
+                    btn.layer.cornerRadius = IOSKeyboardLayoutEngine.keyCornerRadius
                     btn.layer.cornerCurve = .continuous
-                    btn.layer.shadowColor = UIColor.black.cgColor
-                    btn.layer.shadowOffset = CGSize(width: 0, height: 0.8)
-                    btn.layer.shadowRadius = 0.6
-                    btn.layer.shadowOpacity = dark ? 0.30 : 0.12
+                    btn.layer.shadowOpacity = 0
                     btn.setTitle(item.text, for: .normal)
                     btn.setTitleColor(textCol, for: .normal)
-                    btn.titleLabel?.font = .systemFont(ofSize: 17, weight: .regular)
-                    btn.heightAnchor.constraint(equalToConstant: 44).isActive = true
+                    btn.titleLabel?.font = .systemFont(ofSize: 17.5, weight: .regular)
+                    btn.heightAnchor.constraint(equalToConstant: 45).isActive = true
                     btn.addAction(UIAction { [weak self] _ in self?.onSelectAbsCandidate?(absIdx) }, for: .touchUpInside)
                     row.addArrangedSubview(btn)
                 } else {
@@ -521,7 +505,7 @@ final class IOSExpandedCandidateView: UIView {
 
     private func makeRailButton(title: String?, symbol: String?, action: @escaping () -> Void) -> UIButton {
         let b = UIButton(type: .system)
-        b.layer.cornerRadius = 8.5
+        b.layer.cornerRadius = IOSKeyboardLayoutEngine.keyCornerRadius
         b.layer.cornerCurve = .continuous
         if let s = symbol {
             b.setImage(UIImage(systemName: s), for: .normal)

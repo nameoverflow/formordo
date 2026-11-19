@@ -139,7 +139,6 @@ private final class IOSKeycapNodeView: UIView {
     private let symbolView = UIImageView()
     private let subscriptLabel = UILabel()
 
-    private var lastBoundsSize: CGSize = .zero
     private(set) var currentSpec: IOSKeySpec?
     private var isDarkTheme = false
     private var isPressedState = false
@@ -152,9 +151,6 @@ private final class IOSKeycapNodeView: UIView {
         isUserInteractionEnabled = false
         layer.cornerRadius = IOSKeyboardLayoutEngine.keyCornerRadius
         layer.cornerCurve = .continuous
-        layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOffset = CGSize(width: 0, height: 0.85)
-        layer.shadowRadius = 0.65
 
         primaryLabel.textAlignment = .center
         primaryLabel.isUserInteractionEnabled = false
@@ -162,7 +158,7 @@ private final class IOSKeycapNodeView: UIView {
         symbolView.contentMode = .center
         symbolView.isUserInteractionEnabled = false
 
-        subscriptLabel.font = .systemFont(ofSize: 11.5, weight: .regular)
+        subscriptLabel.font = .systemFont(ofSize: 12.5, weight: .regular)
         subscriptLabel.textAlignment = .right
         subscriptLabel.isUserInteractionEnabled = false
 
@@ -185,13 +181,6 @@ private final class IOSKeycapNodeView: UIView {
         if frameChanged {
             UIView.performWithoutAnimation {
                 self.frame = spec.frame
-                if bounds.size != lastBoundsSize {
-                    lastBoundsSize = bounds.size
-                    layer.shadowPath = UIBezierPath(
-                        roundedRect: bounds,
-                        cornerRadius: IOSKeyboardLayoutEngine.keyCornerRadius
-                    ).cgPath
-                }
                 layoutSublayersOfKeycap(spec: spec)
             }
         }
@@ -216,20 +205,29 @@ private final class IOSKeycapNodeView: UIView {
         let b = bounds
         let yNudge: CGFloat
         switch spec.kind {
-        case .letter: yNudge = -1.1
-        case .symbol: yNudge = -0.5
-        default: yNudge = 0.0
+        case .letter:
+            let isUpper = spec.primaryLabel.first?.isUppercase ?? false
+            yNudge = isUpper ? -0.3 : -2.2
+        case .symbol, .planeSwitch:
+            yNudge = -0.8
+        case .modeToggle:
+            yNudge = -0.5
+        default:
+            yNudge = 0.0
         }
         primaryLabel.frame = b.offsetBy(dx: 0, dy: yNudge)
         symbolView.frame = b
-        subscriptLabel.frame = CGRect(x: b.width - 28, y: b.height - 18.5, width: 21, height: 14)
+        subscriptLabel.frame = CGRect(x: b.width - 30.0, y: b.height - 20.0, width: 24.0, height: 15.0)
     }
 
     private func updateContent(spec: IOSKeySpec, dark: Bool) {
         let fgColor: UIColor = spec.isBlueAccent ? .white : (dark ? .white : .black)
         let subColor: UIColor = dark
-            ? UIColor(white: 1.0, alpha: 0.42)
-            : UIColor(red: 0.58, green: 0.59, blue: 0.62, alpha: 1.0)
+            ? UIColor(white: 1.0, alpha: 0.30)
+            : UIColor(white: 0.0, alpha: 0.20)
+        let modeSecondaryColor: UIColor = dark
+            ? UIColor(white: 1.0, alpha: 0.45)
+            : UIColor(white: 0.0, alpha: 0.38)
 
         if let symName = spec.systemSymbol {
             primaryLabel.isHidden = true
@@ -239,7 +237,7 @@ private final class IOSKeycapNodeView: UIView {
             if let cached = Self.symbolCache[cacheKey] {
                 template = cached
             } else {
-                let cfg = UIImage.SymbolConfiguration(pointSize: 18.5, weight: .regular)
+                let cfg = UIImage.SymbolConfiguration(pointSize: 19.5, weight: .regular)
                 let img = UIImage(systemName: symName, withConfiguration: cfg)?.withRenderingMode(.alwaysTemplate)
                 if let img { Self.symbolCache[cacheKey] = img }
                 template = img
@@ -253,7 +251,7 @@ private final class IOSKeycapNodeView: UIView {
                 let attr = NSMutableAttributedString(
                     string: spec.primaryLabel,
                     attributes: [
-                        .font: UIFont.systemFont(ofSize: 15.5, weight: .medium),
+                        .font: UIFont.systemFont(ofSize: 16.5, weight: .medium),
                         .foregroundColor: fgColor,
                     ]
                 )
@@ -261,8 +259,8 @@ private final class IOSKeycapNodeView: UIView {
                     NSAttributedString(
                         string: secondary,
                         attributes: [
-                            .font: UIFont.systemFont(ofSize: 11.5, weight: .regular),
-                            .foregroundColor: subColor,
+                            .font: UIFont.systemFont(ofSize: 12.0, weight: .regular),
+                            .foregroundColor: modeSecondaryColor,
                         ]
                     )
                 )
@@ -273,16 +271,20 @@ private final class IOSKeycapNodeView: UIView {
                 let weight: UIFont.Weight
                 switch spec.kind {
                 case .letter:
-                    fontSize = 23.0
+                    let isUpper = spec.primaryLabel.first?.isUppercase ?? false
+                    fontSize = isUpper ? 22.5 : 24.5
                     weight = .regular
                 case .symbol(let s):
-                    fontSize = s.count > 1 ? 16.0 : 21.0
+                    fontSize = s.count > 1 ? 16.5 : 21.5
+                    weight = .regular
+                case .planeSwitch:
+                    fontSize = 18.0
                     weight = .regular
                 case .returnKey:
-                    fontSize = 15.5
+                    fontSize = 16.0
                     weight = spec.isBlueAccent ? .semibold : .regular
                 default:
-                    fontSize = 16.0
+                    fontSize = 17.5
                     weight = .regular
                 }
                 primaryLabel.font = .systemFont(ofSize: fontSize, weight: weight)
@@ -312,15 +314,14 @@ private final class IOSKeycapNodeView: UIView {
     ) {
         let normalBg: UIColor = spec.isBlueAccent
             ? .systemBlue
-            : (dark ? UIColor(red: 0.28, green: 0.28, blue: 0.30, alpha: 1.0) : .white)
+            : (dark ? UIColor(white: 1.0, alpha: 0.175) : .white)
         let pressedBg: UIColor = spec.isBlueAccent
             ? UIColor.systemBlue.withAlphaComponent(0.80)
             : (dark
-                ? UIColor(red: 0.20, green: 0.20, blue: 0.23, alpha: 1.0)
+                ? UIColor(white: 1.0, alpha: 0.30)
                 : UIColor(red: 214.0 / 255.0, green: 216.0 / 255.0, blue: 222.0 / 255.0, alpha: 1.0))
 
         let targetBg = pressed ? pressedBg : normalBg
-        let targetShadowOpacity: Float = pressed ? 0.02 : (dark ? 0.32 : 0.15)
         let targetTransform: CGAffineTransform = pressed
             ? CGAffineTransform(translationX: 0, y: 0.45)
             : .identity
@@ -328,7 +329,6 @@ private final class IOSKeycapNodeView: UIView {
 
         let applyBlock = {
             self.backgroundColor = targetBg
-            self.layer.shadowOpacity = targetShadowOpacity
             self.transform = targetTransform
             self.primaryLabel.alpha = contentAlpha
         }
@@ -819,8 +819,9 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                     continue
                 }
                 if case .symbol(let sym) = hit.kind {
+                    let activePlane: IOSKeyPlane = snap.keys.contains(where: { $0.id == "P_numbers" }) ? .symbols : .numbers
                     onKeyTouchUp?(hit, pt)
-                    if sym.allSatisfy(\.isNumber) {
+                    if !IOSKeyboardLayoutEngine.shouldReturnToLettersAfterSymbol(sym, on: activePlane) {
                         onRestorePlane?()
                     }
                 } else if hit.id == state.initialKey.id {
@@ -997,16 +998,16 @@ final class IOSKeyCalloutView: UIView {
         let rawFloatingY = keyFrameInSuperview.minY - hoverGap - headH
 
         let fillCol = dark
-            ? UIColor(red: 0.35, green: 0.35, blue: 0.38, alpha: 1.0)
+            ? UIColor(red: 0.29, green: 0.29, blue: 0.30, alpha: 1.0)
             : UIColor.white
         let strokeCol = dark
-            ? UIColor.white.withAlphaComponent(0.15)
+            ? UIColor.white.withAlphaComponent(0.14)
             : UIColor.black.withAlphaComponent(0.06)
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        let isDockedRow0 = (rawFloatingY < 1.5)
+        let isDockedRow0 = (rawFloatingY < 4.0)
 
         if !isDockedRow0 {
             // Row 1 & Row 2: pure standalone floating iOS 26 squircle!
@@ -1025,9 +1026,9 @@ final class IOSKeyCalloutView: UIView {
         } else {
             // Row 0 (`q..p`): full-size callout docked seamlessly into exact keycap base!
             // Align outer edge flush with `q`/`p` keycap (`6.67pt`) so it sits cleanly inside the 26pt tray corner,
-            // and place waist at `46.5..58.5pt` so descenders (`q`, `y`, `p`) have generous room above the taper.
+            // and place waist at `49.0..62.0pt` so descenders (`q`, `y`, `p`) have generous room above the taper.
             coveredKeyId = keyId
-            let topY: CGFloat = 3.5
+            let topY: CGFloat = 6.0
             let botY: CGFloat = keyFrameInSuperview.maxY
             let isLeftEdge = (keyFrameInSuperview.minX < 18.0)
             let isRightEdge = (keyFrameInSuperview.maxX > superW - 18.0)
@@ -1052,8 +1053,8 @@ final class IOSKeyCalloutView: UIView {
             let kL = keyFrameInSuperview.minX - unionMinX
             let kR = keyFrameInSuperview.maxX - unionMinX
 
-            let waistTop: CGFloat = 46.5
-            let waistBot: CGFloat = 58.5
+            let waistTop: CGFloat = 49.0
+            let waistBot: CGFloat = 62.0
             let path = Self.makeDockedBalloonPath(
                 headLeft: hL,
                 headRight: hR,
@@ -1073,14 +1074,14 @@ final class IOSKeyCalloutView: UIView {
                 shapeLayer.path = path
                 shapeLayer.shadowPath = path
                 glyphLabel.font = .systemFont(ofSize: 35.5, weight: .regular)
-                glyphLabel.frame = CGRect(x: hL, y: -1.5, width: row0HeadW, height: 49.0)
+                glyphLabel.frame = CGRect(x: hL, y: -1.5, width: row0HeadW, height: 51.0)
             }
         }
 
         shapeLayer.fillColor = fillCol.cgColor
         shapeLayer.strokeColor = strokeCol.cgColor
         shapeLayer.lineWidth = 0.5
-        shapeLayer.shadowOpacity = dark ? 0.40 : 0.15
+        shapeLayer.shadowOpacity = dark ? 0.34 : 0.14
         CATransaction.commit()
 
         glyphLabel.text = label
