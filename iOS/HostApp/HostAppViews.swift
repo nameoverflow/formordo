@@ -188,7 +188,7 @@ public struct IOSHostRootView: View {
 
                         stepLine(num: "1", text: "进入「设置 → 通用 → 键盘 → 键盘 → 添加新键盘」")
                         stepLine(num: "2", text: "在第三方键盘中选择「形序」即可离线极速盲打")
-                        stepLine(num: "3", text: "在本 App 的「输入设置」中选择五笔方案和上屏方式。")
+                        stepLine(num: "3", text: "如需候选栏剪贴板提示，开启「允许完全访问」并在「设置 → App → 形序 → 从其他 App 粘贴」设为「允许」")
 
                         Button {
                             openSystemKeyboardSettings()
@@ -277,6 +277,8 @@ public struct IOSHostRootView: View {
                         iosToggleRow("z 键通配与拼音反查", sub: "z 查码 + 输拼音反查五笔拆码", isOn: binding(\.zOmnipotent))
                         Divider()
                         iosToggleRow("中文标点与引号智能配对", sub: "自动转换全角标点并成对输入引号", isOn: binding(\.smartPunctuation))
+                        Divider()
+                        iosToggleRow("候选栏剪贴板提示", sub: "空闲时在候选栏中央显示最近复制内容，并自动提取剪贴板验证码（需开启完全访问）", isOn: binding(\.clipboardSuggestion))
                     }
                     .padding(14)
                     .background(iosCardBackground)

@@ -79,7 +79,7 @@ test: rust-test swift-test ios-test
 
 ios-test: $(CORE_LIB)
 	mkdir -p build
-	swiftc -O $(MACOS_TARGET) Sources/WubiCoreBridge.swift iOS/Shared/IOSKeyboardLayoutEngine.swift Tests/IOSKeyboardTests.swift $(CORE_FLAGS) -framework Foundation -framework CoreGraphics -o build/ios-keyboard-tests
+	swiftc -O $(MACOS_TARGET) Sources/WubiCoreBridge.swift iOS/Shared/IOSKeyboardLayoutEngine.swift iOS/Shared/IOSClipboardSuggestion.swift Tests/IOSKeyboardTests.swift $(CORE_FLAGS) -framework Foundation -framework CoreGraphics -o build/ios-keyboard-tests
 	build/ios-keyboard-tests
 
 previews: $(CORE_LIB)

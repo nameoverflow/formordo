@@ -20,6 +20,8 @@ public final class KeyboardViewController: UIInputViewController {
     private var lastVisualKeySignature: VisualLayoutSignature?
     private var planeBeforePress: IOSKeyPlane = .letters
     private var markedCode = ""
+    private let clipboardStore = IOSClipboardSuggestionStore()
+    private var activeClipboardSuggestion: IOSClipboardSuggestion?
 
     private lazy var feedback = IOSKeyboardFeedbackController(attachingTo: keyCanvas)
 
@@ -36,11 +38,18 @@ public final class KeyboardViewController: UIInputViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
         setupViews()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePasteboardChanged),
+            name: UIPasteboard.changedNotification,
+            object: nil
+        )
         if #available(iOS 17.0, *) {
             registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: KeyboardViewController, _) in
                 self.syncProxyTraits()
             }
         }
+        refreshClipboardSuggestion()
         syncEngineToUI()
     }
 
@@ -52,6 +61,7 @@ public final class KeyboardViewController: UIInputViewController {
         super.viewWillAppear(animated)
         feedback.prepare()
         bridge.loadConfigAndUser()
+        refreshClipboardSuggestion()
         applyDesiredTrayDimensions()
         syncEngineToUI()
     }
@@ -109,7 +119,31 @@ public final class KeyboardViewController: UIInputViewController {
 
     public override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
+        refreshClipboardSuggestion()
         syncProxyTraits()
+    }
+
+    @objc private func handlePasteboardChanged() {
+        refreshClipboardSuggestion()
+        syncEngineToUI()
+    }
+
+    private func refreshClipboardSuggestion() {
+        guard self.hasFullAccess, bridge.prefs.clipboardSuggestion else {
+            activeClipboardSuggestion = nil
+            return
+        }
+        let pb = UIPasteboard.general
+        let prefersOTP = (textDocumentProxy.textContentType == .oneTimeCode)
+        activeClipboardSuggestion = clipboardStore.refresh(
+            hasFullAccess: true,
+            enabled: true,
+            hasStrings: pb.hasStrings,
+            changeCount: pb.changeCount,
+            prefersOTP: prefersOTP,
+            now: Date().timeIntervalSince1970,
+            readString: { pb.string }
+        )
     }
 
     private func setupViews() {
@@ -302,6 +336,25 @@ public final class KeyboardViewController: UIInputViewController {
             self.keyCanvas.flushPendingTouches()
             self.feedback.fireSoftStep(playClick: true)
             self.textDocumentProxy.insertText(word)
+        }
+
+        ribbonView.onSelectClipboard = { [weak self] suggestion in
+            guard let self else { return }
+            self.keyCanvas.flushPendingTouches()
+            self.feedback.fireSoftStep(playClick: true)
+            self.textDocumentProxy.insertText(suggestion.insertText)
+            self.clipboardStore.consume(changeCount: suggestion.changeCount)
+            self.activeClipboardSuggestion = nil
+            self.syncEngineToUI()
+        }
+
+        ribbonView.onDismissClipboard = { [weak self] suggestion in
+            guard let self else { return }
+            self.keyCanvas.flushPendingTouches()
+            self.feedback.fireSoftStep(playClick: false)
+            self.clipboardStore.dismiss(changeCount: suggestion.changeCount)
+            self.activeClipboardSuggestion = nil
+            self.syncEngineToUI()
         }
 
         ribbonView.onTapChevron = { [weak self] in
@@ -571,12 +624,15 @@ public final class KeyboardViewController: UIInputViewController {
 
     private func syncEngineToUI() {
         let st = bridge.state
+        if st.preedit.isEmpty && activeClipboardSuggestion != nil {
+            refreshClipboardSuggestion()
+        }
         layoutEngine.asciiMode = st.asciiMode
         layoutEngine.schemaId = st.schemaId
         layoutEngine.isComposing = !st.preedit.isEmpty
         layoutEngine.validNextMask = st.validNextMask
         keyCanvas.validNextMask = st.validNextMask
-        ribbonView.update(state: st, dark: isDarkAppearance)
+        ribbonView.update(state: st, dark: isDarkAppearance, clipboardSuggestion: activeClipboardSuggestion)
         refreshKeyboardLayout()
     }
 
@@ -589,7 +645,7 @@ public final class KeyboardViewController: UIInputViewController {
         glassBackdrop.layer.borderWidth = 0
 
         keyCanvas.applyTheme(dark: dark)
-        ribbonView.update(state: bridge.state, dark: dark)
+        ribbonView.update(state: bridge.state, dark: dark, clipboardSuggestion: activeClipboardSuggestion)
         refreshKeyboardLayout()
     }
 

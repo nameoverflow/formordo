@@ -170,6 +170,107 @@ struct IOSKeyboardTests {
         let zOut = bridge.pushTouch(reportedAscii: UInt8(ascii: "z"), x: Float(zCorner.x), y: Float(zCorner.y), isNormalized: false, timestampMs: 4000)
         assert(zOut.preedit == "z", "Expected Rust view-space touch to preserve UI hit-tested 'z', got '\(zOut.preedit)'")
 
-        print("✓ All iOS 26 native grid, lowercase/shift, trackpad, ergonomic Y-bias & dynamic next-key tests passed!")
+        // 11. Verify native centered clipboard suggestion parser, smart OTP extraction, and changeCount caching!
+        // 11a. Normal multiline text keeps original insertText and collapses displayText to single line
+        let multi = IOSClipboardParser.parse(raw: "  第一行\n\n  第二行\t内容  ", changeCount: 1)!
+        assert(!multi.isOTP && multi.subtitle == "来自剪贴板")
+        assert(multi.insertText == "  第一行\n\n  第二行\t内容  ")
+        assert(multi.displayText == "第一行 第二行 内容", "Got '\(multi.displayText)'")
+        assert(IOSClipboardParser.parse(raw: "  \n\t ", changeCount: 1) == nil)
+
+        // 11b. Chinese & English SMS/email OTP extraction with noise filtering (years, bank card tail, URLs)
+        let bankSMS = IOSClipboardParser.parse(
+            raw: "【招商银行】2026年11月19日您尾号8812的卡验证码为394810，5分钟内有效。",
+            changeCount: 2
+        )!
+        assert(bankSMS.isOTP && bankSMS.insertText == "394810" && bankSMS.subtitle == "剪贴板验证码", "Got \(bankSMS)")
+
+        let googleSMS = IOSClipboardParser.parse(
+            raw: "G-591024 is your Google verification code.",
+            changeCount: 3
+        )!
+        assert(googleSMS.isOTP && googleSMS.insertText == "591024", "Got \(googleSMS)")
+
+        let appleGrouped = IOSClipboardParser.parse(
+            raw: "Your Apple Account verification code is: 904 281",
+            changeCount: 4
+        )!
+        assert(appleGrouped.isOTP && appleGrouped.insertText == "904281", "Got \(appleGrouped)")
+
+        // Non-OTP text with numbers or URLs must NOT trigger OTP extraction
+        let meetingNote = IOSClipboardParser.parse(raw: "2026年11月19日开会，房间号1024", changeCount: 5)!
+        assert(!meetingNote.isOTP && meetingNote.insertText == "2026年11月19日开会，房间号1024")
+
+        let otpURL = IOSClipboardParser.parse(raw: "https://example.com/otp/123456", changeCount: 6)!
+        assert(!otpURL.isOTP && otpURL.insertText == "https://example.com/otp/123456")
+
+        let sentenceWithURL = IOSClipboardParser.parse(raw: "请打开 https://example.com/otp/123456 查看", changeCount: 7)!
+        assert(!sentenceWithURL.isOTP && sentenceWithURL.insertText == "请打开 https://example.com/otp/123456 查看")
+
+        // Pure 6-digit code promotes subtitle when focused in `.oneTimeCode` field
+        let pureCodeNormal = IOSClipboardParser.parse(raw: "482916", changeCount: 8, prefersOTP: false)!
+        assert(!pureCodeNormal.isOTP && pureCodeNormal.insertText == "482916")
+        let pureCodeOTP = IOSClipboardParser.parse(raw: "482916", changeCount: 8, prefersOTP: true)!
+        assert(pureCodeOTP.isOTP && pureCodeOTP.subtitle == "剪贴板验证码" && pureCodeOTP.insertText == "482916")
+
+        // 11c. IOSClipboardSuggestionStore: readString called ONCE per changeCount, TTL, consume, dismiss
+        final class InMemoryKV: IOSClipboardKeyValueStore {
+            var dict: [String: Any] = [:]
+            func integer(forKey key: String) -> Int { dict[key] as? Int ?? 0 }
+            func double(forKey key: String) -> Double { dict[key] as? Double ?? 0 }
+            func string(forKey key: String) -> String? { dict[key] as? String }
+            func object(forKey key: String) -> Any? { dict[key] }
+            func set(_ value: Int, forKey key: String) { dict[key] = value }
+            func set(_ value: Double, forKey key: String) { dict[key] = value }
+            func set(_ value: Any?, forKey key: String) { dict[key] = value }
+            func removeObject(forKey key: String) { dict.removeValue(forKey: key) }
+        }
+
+        let kv = InMemoryKV()
+        let clipStore = IOSClipboardSuggestionStore(store: kv, ttlSeconds: 180)
+        var readCalls = 0
+        // No full access -> never reads pasteboard
+        assert(clipStore.refresh(hasFullAccess: false, enabled: true, hasStrings: true, changeCount: 10, prefersOTP: false, now: 1000) {
+            readCalls += 1; return "hello"
+        } == nil)
+        assert(readCalls == 0)
+
+        // First observation reads once and caches
+        let s1 = clipStore.refresh(hasFullAccess: true, enabled: true, hasStrings: true, changeCount: 10, prefersOTP: false, now: 1000) {
+            readCalls += 1; return "482916"
+        }
+        assert(s1?.insertText == "482916" && readCalls == 1)
+
+        // Second observation with same changeCount uses cache (0 extra pasteboard reads!) and respects prefersOTP dynamically
+        let s2 = clipStore.refresh(hasFullAccess: true, enabled: true, hasStrings: true, changeCount: 10, prefersOTP: true, now: 1030) {
+            readCalls += 1; return "482916"
+        }
+        assert(s2?.isOTP == true && readCalls == 1)
+
+        // TTL expiry hides suggestion without re-reading pasteboard
+        let sExpired = clipStore.refresh(hasFullAccess: true, enabled: true, hasStrings: true, changeCount: 10, prefersOTP: false, now: 1200) {
+            readCalls += 1; return "482916"
+        }
+        assert(sExpired == nil && readCalls == 1)
+
+        // New changeCount reads once again, then consume() permanently suppresses it
+        let s3 = clipStore.refresh(hasFullAccess: true, enabled: true, hasStrings: true, changeCount: 11, prefersOTP: false, now: 1300) {
+            readCalls += 1; return "新复制文本"
+        }
+        assert(s3?.insertText == "新复制文本" && readCalls == 2)
+        clipStore.consume(changeCount: 11)
+        let sAfterConsume = clipStore.refresh(hasFullAccess: true, enabled: true, hasStrings: true, changeCount: 11, prefersOTP: false, now: 1305) {
+            readCalls += 1; return "新复制文本"
+        }
+        assert(sAfterConsume == nil && readCalls == 2)
+
+        // Preference TOML round-trip
+        var prefs = WubiPreferences()
+        assert(prefs.clipboardSuggestion == true)
+        prefs.clipboardSuggestion = false
+        let parsedPrefs = WubiPreferences.fromTOML(prefs.toTOML())
+        assert(parsedPrefs.clipboardSuggestion == false)
+
+        print("✓ All iOS 26 native grid, lowercase/shift, trackpad, ergonomic Y-bias, dynamic next-key & clipboard tests passed!")
     }
 }

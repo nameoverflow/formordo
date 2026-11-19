@@ -183,6 +183,7 @@ public struct WubiPreferences: Equatable, Sendable {
     public var shiftToggleMode: String = "commit_code"
     public var smartPunctuation: Bool = true
     public var semicolonQuoteSelect: Bool = false
+    public var clipboardSuggestion: Bool = true
 
     public var fourthCodeAutoCommit: Bool = true
     public var fifthCodePushCommit: Bool = true
@@ -223,6 +224,7 @@ public struct WubiPreferences: Equatable, Sendable {
         shift_toggle_mode = "\(shiftToggleMode)"
         smart_punctuation = \(smartPunctuation)
         semicolon_quote_select = \(semicolonQuoteSelect)
+        clipboard_suggestion = \(clipboardSuggestion)
 
         [typing]
         fourth_code_auto_commit = \(fourthCodeAutoCommit)
@@ -280,6 +282,8 @@ public struct WubiPreferences: Equatable, Sendable {
                 p.smartPunctuation = boolVal
             case (_, "semicolon_quote_select"):
                 p.semicolonQuoteSelect = boolVal
+            case (_, "clipboard_suggestion"):
+                p.clipboardSuggestion = boolVal
             case (_, "fourth_code_auto_commit"):
                 p.fourthCodeAutoCommit = boolVal
             case (_, "fifth_code_push_commit"):

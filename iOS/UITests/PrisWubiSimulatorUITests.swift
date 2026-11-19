@@ -469,6 +469,106 @@ final class PrisWubiSimulatorUITests: XCTestCase {
     }
 
     @MainActor
+    func testClipboardSuggestionAndOTPExtraction() throws {
+        // 1. Ensure Full Access is enabled for 形序 in iOS Settings -> 通用 -> 键盘 -> 键盘 -> 形序
+        let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
+        settings.terminate()
+        settings.launch()
+
+        let general = settings.cells.containing(.staticText, identifier: "通用").firstMatch
+        if general.waitForExistence(timeout: 3) { general.tap() }
+        let kb = settings.cells.containing(.staticText, identifier: "键盘").firstMatch
+        if kb.waitForExistence(timeout: 3) { kb.tap() }
+        let kbsCell = settings.tables.cells.containing(.staticText, identifier: "键盘").firstMatch
+        if kbsCell.waitForExistence(timeout: 3) { kbsCell.tap() }
+
+        let prisRow = settings.cells.containing(NSPredicate(format: "label CONTAINS '形序'")).firstMatch
+        if prisRow.waitForExistence(timeout: 3) {
+            prisRow.tap()
+            let fullAccessSwitch = settings.switches.containing(NSPredicate(format: "label CONTAINS '允许完全访问'")).firstMatch
+            if fullAccessSwitch.waitForExistence(timeout: 3), (fullAccessSwitch.value as? String) == "0" {
+                let innerKnob = fullAccessSwitch.switches.firstMatch
+                if innerKnob.exists {
+                    innerKnob.tap()
+                } else {
+                    fullAccessSwitch.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+                }
+                let allowBtn = settings.alerts.buttons["允许"].firstMatch
+                if allowBtn.waitForExistence(timeout: 2.5) {
+                    allowBtn.tap()
+                } else {
+                    let sbAllow = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.buttons["允许"].firstMatch
+                    if sbAllow.waitForExistence(timeout: 1.5) {
+                        sbAllow.tap()
+                    }
+                }
+            }
+        }
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        func acceptPastePromptIfShown() {
+            let allowPaste = springboard.buttons["允许粘贴"].firstMatch
+            if allowPaste.waitForExistence(timeout: 1.5) {
+                allowPaste.tap()
+                Thread.sleep(forTimeInterval: 0.4)
+            }
+        }
+
+        defer {
+            UIPasteboard.general.items = []
+        }
+
+        // 2. Copy a normal URL -> launch app -> centered clipboard pill appears -> tap inserts & dismisses
+        UIPasteboard.general.string = "https://still.fail/docs/formordo"
+        let app = openLiveKeyboard()
+        acceptPastePromptIfShown()
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let inputUI = XCUIApplication(bundleIdentifier: "com.apple.InputUI")
+        let pillInApp = app.buttons["PrisWubiClipboardPill"]
+        let pillInInput = inputUI.buttons["PrisWubiClipboardPill"]
+        let pill = pillInApp.waitForExistence(timeout: 2.5) ? pillInApp : pillInInput
+        XCTAssertTrue(pill.waitForExistence(timeout: 2.5), "Expected centered clipboard pill to appear in idle candidate bar")
+        attachShot(name: "clip-01-normal-light")
+
+        pill.tap()
+        Thread.sleep(forTimeInterval: 0.4)
+        XCTAssertEqual(app.textFields.firstMatch.value as? String, "https://still.fail/docs/formordo")
+        XCTAssertFalse(pill.exists, "Clipboard pill should disappear immediately after pasting")
+
+        // 3. Copy an SMS with OTP -> keyboard extracts 6-digit code -> tap inserts pure code
+        UIPasteboard.general.string = "【招商银行】2026年11月19日您尾号8812的卡验证码为394810，5分钟内有效。"
+        app.launchArguments = ["--autofocus"]
+        app.launch()
+        acceptPastePromptIfShown()
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let otpPill = pillInApp.waitForExistence(timeout: 2.5) ? pillInApp : pillInInput
+        XCTAssertTrue(otpPill.waitForExistence(timeout: 2.5), "Expected OTP clipboard pill to appear")
+        attachShot(name: "clip-02-otp-light")
+
+        otpPill.tap()
+        Thread.sleep(forTimeInterval: 0.4)
+        XCTAssertEqual(app.textFields.firstMatch.value as? String, "394810")
+
+        // 4. Copy another string and tap the subtle dismiss 'x' button -> hides without inserting
+        UIPasteboard.general.string = "临时忽略测试文本"
+        app.launchArguments = ["--autofocus"]
+        app.launch()
+        acceptPastePromptIfShown()
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let dismissInApp = app.buttons["PrisWubiClipboardDismiss"]
+        let dismissInInput = inputUI.buttons["PrisWubiClipboardDismiss"]
+        let dismissBtn = dismissInApp.waitForExistence(timeout: 2.5) ? dismissInApp : dismissInInput
+        XCTAssertTrue(dismissBtn.waitForExistence(timeout: 2.5), "Expected clipboard dismiss button")
+        dismissBtn.tap()
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertFalse(pillInApp.exists || pillInInput.exists, "Dismiss button must hide clipboard pill")
+        XCTAssertEqual((app.textFields.firstMatch.value as? String) ?? "", "点此弹出键盘试打五笔、长按空格滑动移光标…")
+    }
+
+    @MainActor
     private func tapNorm(_ app: XCUIApplication, dx: CGFloat, dy: CGFloat) {
         app.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: dy)).tap()
     }

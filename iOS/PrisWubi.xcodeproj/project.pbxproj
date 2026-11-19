@@ -17,10 +17,13 @@
 		5916FC8112AB9807B7E8856A /* HostAppViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C04A8DACAB512A4EAE35043 /* HostAppViews.swift */; };
 		65371983B35BE75EBDFFD8E4 /* IOSKeyCanvasAndCallout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F041469F3DCD105F71210FD /* IOSKeyCanvasAndCallout.swift */; };
 		76AFF18C7BEFF64DA84073A0 /* IOSKeyCanvasAndCallout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F041469F3DCD105F71210FD /* IOSKeyCanvasAndCallout.swift */; };
+		7EE1FF2DE4B9E5E4150000C1 /* IOSClipboardSuggestion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A5FFA4E3F6A17862C5A32B4 /* IOSClipboardSuggestion.swift */; };
 		A6A25F15C0133AD063D0332D /* Dicts in Resources */ = {isa = PBXBuildFile; fileRef = 93C2D593570B7763381F20F0 /* Dicts */; };
 		DB5E7BE9DD8ED93742F22633 /* IOSCandidateViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADD2833DB2E106E705330613 /* IOSCandidateViews.swift */; };
+		E5C2B242A27F9FA768E06E98 /* IOSClipboardSuggestion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A5FFA4E3F6A17862C5A32B4 /* IOSClipboardSuggestion.swift */; };
 		E6206E6B38C847EC62265FFA /* PrisWubiSimulatorUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FFF3375C4BC3338F1EE5887 /* PrisWubiSimulatorUITests.swift */; };
 		EFC916408F32DE17BE4B4043 /* IOSKeyboardLayoutEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FFA5F9F9F1257560BC74D3C /* IOSKeyboardLayoutEngine.swift */; };
+		F03E4A69576D2A4EF41B990A /* IOSClipboardSuggestion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A5FFA4E3F6A17862C5A32B4 /* IOSClipboardSuggestion.swift */; };
 		F23FD72AB4DFDD79E3EDA8E2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 46FCA1D0F62C2828D4C3FD00 /* Assets.xcassets */; };
 		FDC0C44E3C82997C4D7B0826 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD2549046A68359BCF56EAD /* KeyboardViewController.swift */; };
 /* End PBXBuildFile section */
@@ -59,6 +62,7 @@
 /* Begin PBXFileReference section */
 		06089A75C274438ECC15C8C2 /* PrisWubiIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrisWubiIOSApp.swift; sourceTree = "<group>"; };
 		0F041469F3DCD105F71210FD /* IOSKeyCanvasAndCallout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSKeyCanvasAndCallout.swift; sourceTree = "<group>"; };
+		2A5FFA4E3F6A17862C5A32B4 /* IOSClipboardSuggestion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSClipboardSuggestion.swift; sourceTree = "<group>"; };
 		2C04A8DACAB512A4EAE35043 /* HostAppViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostAppViews.swift; sourceTree = "<group>"; };
 		2FFF3375C4BC3338F1EE5887 /* PrisWubiSimulatorUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrisWubiSimulatorUITests.swift; sourceTree = "<group>"; };
 		3FFA5F9F9F1257560BC74D3C /* IOSKeyboardLayoutEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSKeyboardLayoutEngine.swift; sourceTree = "<group>"; };
@@ -117,6 +121,7 @@
 		AE6BB8CE294B01C26145EADA /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				2A5FFA4E3F6A17862C5A32B4 /* IOSClipboardSuggestion.swift */,
 				3FFA5F9F9F1257560BC74D3C /* IOSKeyboardLayoutEngine.swift */,
 			);
 			path = Shared;
@@ -311,6 +316,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				DB5E7BE9DD8ED93742F22633 /* IOSCandidateViews.swift in Sources */,
+				F03E4A69576D2A4EF41B990A /* IOSClipboardSuggestion.swift in Sources */,
 				65371983B35BE75EBDFFD8E4 /* IOSKeyCanvasAndCallout.swift in Sources */,
 				212CA121394AED6B0C628072 /* IOSKeyboardLayoutEngine.swift in Sources */,
 				FDC0C44E3C82997C4D7B0826 /* KeyboardViewController.swift in Sources */,
@@ -322,6 +328,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E5C2B242A27F9FA768E06E98 /* IOSClipboardSuggestion.swift in Sources */,
 				76AFF18C7BEFF64DA84073A0 /* IOSKeyCanvasAndCallout.swift in Sources */,
 				EFC916408F32DE17BE4B4043 /* IOSKeyboardLayoutEngine.swift in Sources */,
 				E6206E6B38C847EC62265FFA /* PrisWubiSimulatorUITests.swift in Sources */,
@@ -333,6 +340,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5916FC8112AB9807B7E8856A /* HostAppViews.swift in Sources */,
+				7EE1FF2DE4B9E5E4150000C1 /* IOSClipboardSuggestion.swift in Sources */,
 				4AA82568A72FD6D8BEF86F47 /* IOSKeyboardLayoutEngine.swift in Sources */,
 				132A67B1C0583D854CBF74E7 /* PrisWubiIOSApp.swift in Sources */,
 				3CC109005CD804F5593D1739 /* WubiCoreBridge.swift in Sources */,

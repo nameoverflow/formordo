@@ -46,6 +46,145 @@ private final class IOSRibbonSlotControl: UIControl {
     }
 }
 
+/// Native iOS 26 centered QuickType / AutoFill style clipboard suggestion pill (pure `UIControl`, zero `UIButton.Configuration`).
+@MainActor
+private final class IOSClipboardPillControl: UIControl {
+    private let iconView = UIImageView()
+    private let subtitleLabel = UILabel()
+    private let valueLabel = UILabel()
+
+    private var isDarkTheme = false
+    private var isCompactLandscape = false
+    private var currentSuggestion: IOSClipboardSuggestion?
+
+    private(set) var intrinsicContentWidth: CGFloat = 140
+
+    override var isHighlighted: Bool {
+        didSet {
+            updateSurfaceColor()
+        }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        layer.cornerRadius = 11.0
+        layer.cornerCurve = .continuous
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityIdentifier = "PrisWubiClipboardPill"
+
+        iconView.contentMode = .scaleAspectFit
+        iconView.isUserInteractionEnabled = false
+
+        subtitleLabel.numberOfLines = 1
+        subtitleLabel.textAlignment = .left
+        subtitleLabel.lineBreakMode = .byClipping
+        subtitleLabel.isUserInteractionEnabled = false
+
+        valueLabel.numberOfLines = 1
+        valueLabel.textAlignment = .center
+        valueLabel.lineBreakMode = .byTruncatingTail
+        valueLabel.isUserInteractionEnabled = false
+
+        addSubview(iconView)
+        addSubview(subtitleLabel)
+        addSubview(valueLabel)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(suggestion: IOSClipboardSuggestion, dark: Bool, compactLandscape: Bool) {
+        currentSuggestion = suggestion
+        isDarkTheme = dark
+        isCompactLandscape = compactLandscape
+
+        let textCol: UIColor = dark ? .white : .black
+        let subtleCol: UIColor = dark ? UIColor(white: 0.70, alpha: 1.0) : UIColor(white: 0.42, alpha: 1.0)
+        let otpTint: UIColor = dark
+            ? UIColor(red: 0.40, green: 0.70, blue: 1.0, alpha: 1.0)
+            : UIColor.systemBlue
+
+        let symbolName = suggestion.isOTP ? "key.fill" : "doc.on.clipboard"
+        let symSize: CGFloat = compactLandscape ? 12.0 : 9.5
+        let symCfg = UIImage.SymbolConfiguration(pointSize: symSize, weight: .medium)
+        iconView.image = UIImage(systemName: symbolName, withConfiguration: symCfg)?.withRenderingMode(.alwaysTemplate)
+        iconView.tintColor = suggestion.isOTP ? otpTint : subtleCol
+
+        subtitleLabel.isHidden = compactLandscape
+        subtitleLabel.font = .systemFont(ofSize: 10.5, weight: .regular)
+        subtitleLabel.textColor = subtleCol
+        subtitleLabel.text = suggestion.subtitle
+
+        if suggestion.isOTP {
+            valueLabel.font = .monospacedDigitSystemFont(ofSize: compactLandscape ? 15.5 : 16.5, weight: .semibold)
+        } else {
+            valueLabel.font = .systemFont(ofSize: compactLandscape ? 14.5 : 15.0, weight: .medium)
+        }
+        valueLabel.textColor = textCol
+        valueLabel.text = suggestion.displayText
+
+        let iconW: CGFloat = compactLandscape ? 14.0 : 11.5
+        let valueW = ceil((suggestion.displayText as NSString).size(withAttributes: [.font: valueLabel.font!]).width)
+        if compactLandscape {
+            intrinsicContentWidth = iconW + 5.0 + valueW + 24.0
+        } else {
+            let subW = ceil((suggestion.subtitle as NSString).size(withAttributes: [.font: subtitleLabel.font!]).width)
+            let topW = iconW + 3.5 + subW
+            intrinsicContentWidth = max(topW, valueW) + 28.0
+        }
+
+        accessibilityLabel = "\(suggestion.subtitle)：\(suggestion.displayText)"
+        updateSurfaceColor()
+        setNeedsLayout()
+    }
+
+    private func updateSurfaceColor() {
+        if isHighlighted {
+            backgroundColor = isDarkTheme
+                ? UIColor(white: 1.0, alpha: 0.22)
+                : UIColor(white: 0.0, alpha: 0.11)
+        } else {
+            backgroundColor = isDarkTheme
+                ? UIColor(white: 1.0, alpha: 0.11)
+                : UIColor(white: 0.0, alpha: 0.048)
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let w = bounds.width
+        let h = bounds.height
+        let padX: CGFloat = 12.0
+
+        if isCompactLandscape {
+            let iconSide: CGFloat = 14.0
+            let gap: CGFloat = 5.0
+            let maxTextW = max(20.0, w - padX * 2.0 - iconSide - gap)
+            let textW = min(maxTextW, ceil(valueLabel.sizeThatFits(CGSize(width: maxTextW, height: h)).width))
+            let totalW = iconSide + gap + textW
+            let startX = floor((w - totalW) * 0.5)
+            iconView.frame = CGRect(x: startX, y: floor((h - iconSide) * 0.5), width: iconSide, height: iconSide)
+            valueLabel.frame = CGRect(x: startX + iconSide + gap, y: 0, width: textW, height: h)
+        } else {
+            let iconSide: CGFloat = 11.0
+            let gap: CGFloat = 3.5
+            let subSize = subtitleLabel.sizeThatFits(CGSize(width: max(20.0, w - padX * 2.0), height: 14.0))
+            let subW = min(max(20.0, w - padX * 2.0 - iconSide - gap), ceil(subSize.width))
+            let topTotalW = iconSide + gap + subW
+            let topStartX = floor((w - topTotalW) * 0.5)
+            let topY: CGFloat = 3.5
+            iconView.frame = CGRect(x: topStartX, y: topY + 1.0, width: iconSide, height: iconSide)
+            subtitleLabel.frame = CGRect(x: topStartX + iconSide + gap, y: topY, width: subW, height: 13.0)
+
+            let valY: CGFloat = 16.5
+            valueLabel.frame = CGRect(x: padX, y: valY, width: max(20.0, w - padX * 2.0), height: max(18.0, h - valY - 2.5))
+        }
+    }
+}
+
 /// iOS 26 Native Airy Unboxed Candidate Bar (`44pt` height):
 /// - Pure `UIView` horizontal track (`clipContainer` + `contentTrack` + horizontal `UIPanGestureRecognizer`)
 ///   with ZERO `UIScrollView`, completely eliminating iOS 26's `_UIScrollPocket` / `UIScrollEdgeEffect`
@@ -54,12 +193,16 @@ private final class IOSRibbonSlotControl: UIControl {
 final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     var onSelectCandidate: ((Int) -> Void)?
     var onSelectStarterWord: ((String) -> Void)?
+    var onSelectClipboard: ((IOSClipboardSuggestion) -> Void)?
+    var onDismissClipboard: ((IOSClipboardSuggestion) -> Void)?
     var onTapChevron: (() -> Void)?
 
     private let clipContainer = UIView()
     private let contentTrack = UIView()
     private let edgeFadeMask = CAGradientLayer()
     private let chevronBtn = UIButton(type: .system)
+    private let clipboardPill = IOSClipboardPillControl()
+    private let clipboardDismissBtn = UIButton(type: .system)
     private var slotControls: [IOSRibbonSlotControl] = []
 
     private var clipTrailingToChevron: NSLayoutConstraint!
@@ -68,6 +211,8 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     private var contentWidth: CGFloat = 0
     private var scrollOffsetX: CGFloat = 0
     private var panStartOffsetX: CGFloat = 0
+    private var activeClipboardSuggestion: IOSClipboardSuggestion?
+    private var lastClipboardCompactLayout: Bool?
 
     private static let starterWords = ["我", "我们", "不是", "怎么", "你", "在", "这", "可以"]
 
@@ -82,7 +227,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
     /// Pass touches in the bottom `8pt` strip (below candidate glyphs) and in the lower half
     /// of unoccupied trailing candidate-bar space straight through to Row 0 (`q..p`),
-    /// while preserving full hit area on `chevronBtn` and eliminating inter-slot dead gaps.
+    /// while preserving full hit area on `chevronBtn`, centered clipboard pill, and eliminating inter-slot dead gaps.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard bounds.contains(point) else { return false }
         if !chevronBtn.isHidden && point.x >= chevronBtn.frame.minX - 4.0 {
@@ -90,6 +235,16 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         }
         if point.y > bounds.height - 8.0 {
             return false
+        }
+        if !clipboardPill.isHidden {
+            if !clipboardDismissBtn.isHidden && clipboardDismissBtn.frame.insetBy(dx: -6.0, dy: -4.0).contains(point) {
+                return true
+            }
+            if clipboardPill.frame.insetBy(dx: -10.0, dy: -4.0).contains(point) {
+                return true
+            }
+            // Empty flanks below mid-height pass straight through to Row 0 (`q..p`).
+            return point.y < bounds.height * 0.45
         }
         let availW = clipContainer.bounds.width
         let hasScrollableOverflow = contentWidth > availW + 2.0
@@ -108,6 +263,14 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
+        if !clipboardPill.isHidden {
+            if !clipboardDismissBtn.isHidden && clipboardDismissBtn.frame.insetBy(dx: -6.0, dy: -4.0).contains(point) {
+                return clipboardDismissBtn
+            }
+            if clipboardPill.frame.insetBy(dx: -10.0, dy: -4.0).contains(point) {
+                return clipboardPill
+            }
+        }
         if hit === clipContainer || hit === contentTrack {
             let trackPt = convert(point, to: contentTrack)
             var nearestSlot: IOSRibbonSlotControl?
@@ -153,8 +316,20 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         chevronBtn.setImage(UIImage(systemName: "chevron.down", withConfiguration: cfg), for: .normal)
         chevronBtn.addTarget(self, action: #selector(handleChevron), for: .touchUpInside)
 
+        clipboardPill.isHidden = true
+        clipboardPill.addTarget(self, action: #selector(handleClipboardTap), for: .touchUpInside)
+
+        let dismissCfg = UIImage.SymbolConfiguration(pointSize: 13.0, weight: .medium)
+        clipboardDismissBtn.setImage(UIImage(systemName: "xmark", withConfiguration: dismissCfg), for: .normal)
+        clipboardDismissBtn.accessibilityIdentifier = "PrisWubiClipboardDismiss"
+        clipboardDismissBtn.accessibilityLabel = "关闭剪贴板提示"
+        clipboardDismissBtn.isHidden = true
+        clipboardDismissBtn.addTarget(self, action: #selector(handleClipboardDismiss), for: .touchUpInside)
+
         addSubview(clipContainer)
         addSubview(chevronBtn)
+        addSubview(clipboardPill)
+        addSubview(clipboardDismissBtn)
 
         clipTrailingToChevron = clipContainer.trailingAnchor.constraint(equalTo: chevronBtn.leadingAnchor)
         clipTrailingToFull = clipContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6)
@@ -222,6 +397,32 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         let barH = clipContainer.bounds.height
         let slotH = min(34.0, max(28.0, barH - 10.0))
         let slotY = floor((barH - slotH) * 0.5)
+
+        // Layout centered native clipboard pill when visible (keeping bottom >= 8pt clear for Row 0 q..p)
+        if !clipboardPill.isHidden, let suggestion = activeClipboardSuggestion {
+            let compact = bounds.height < 46.0
+            if lastClipboardCompactLayout != compact {
+                lastClipboardCompactLayout = compact
+                clipboardPill.configure(suggestion: suggestion, dark: lastDark ?? false, compactLandscape: compact)
+            }
+            let totalW = bounds.width
+            let dismissW: CGFloat = 38.0
+            let pillH: CGFloat = compact ? min(30.0, max(26.0, bounds.height - 8.0)) : 38.0
+            let usableBandH = max(pillH, bounds.height - 8.0)
+            let pillY = compact
+                ? floor((usableBandH - pillH) * 0.5)
+                : min(bounds.height - 8.5 - pillH, floor((bounds.height - pillH) * 0.5) - 1.0)
+            let maxPillW = max(120.0, min(totalW - (dismissW + 12.0) * 2.0, 292.0))
+            let desiredW = min(maxPillW, max(126.0, clipboardPill.intrinsicContentWidth))
+            let pillX = floor((totalW - desiredW) * 0.5)
+            clipboardPill.frame = CGRect(x: pillX, y: pillY, width: desiredW, height: pillH)
+            clipboardDismissBtn.frame = CGRect(
+                x: totalW - dismissW - 4.0,
+                y: pillY,
+                width: dismissW,
+                height: pillH
+            )
+        }
 
         // Adaptive spacing when idle starter words slightly exceed narrower screens (e.g. 393/402pt)
         let visibleSlots = slotControls.filter { !$0.isHidden }
@@ -308,16 +509,19 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     private var lastPreeditEmpty: Bool?
     private var lastDark: Bool?
 
-    func update(state: WubiActionState, dark: Bool) {
+    func update(state: WubiActionState, dark: Bool, clipboardSuggestion: IOSClipboardSuggestion? = nil) {
         let isEmpty = state.preedit.isEmpty
+        let effectiveClipboard = isEmpty ? clipboardSuggestion : nil
         if lastPreeditEmpty == isEmpty,
            lastDark == dark,
+           activeClipboardSuggestion == effectiveClipboard,
            (isEmpty || lastCandidates == state.candidates) {
             return
         }
         lastPreeditEmpty = isEmpty
         lastDark = dark
         lastCandidates = state.candidates
+        activeClipboardSuggestion = effectiveClipboard
 
         let textCol: UIColor = dark ? .white : .black
         let subtleCol: UIColor = dark ? UIColor(white: 0.64, alpha: 1.0) : UIColor(white: 0.44, alpha: 1.0)
@@ -327,59 +531,74 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         clipTrailingToFull.isActive = isEmpty
 
         UIView.performWithoutAnimation {
-            if isEmpty {
-                let words = Self.starterWords
-                ensureSlotCapacity(words.count)
-                for (i, ctrl) in slotControls.enumerated() {
-                    if i < words.count {
-                        ctrl.slotIndex = i
-                        ctrl.starterWord = words[i]
-                        let attr = NSAttributedString(
-                            string: words[i],
-                            attributes: [
-                                .font: UIFont.systemFont(ofSize: 19.5, weight: .regular),
-                                .foregroundColor: textCol,
-                            ]
-                        )
-                        ctrl.setRibbonTitle(attr)
-                        ctrl.isHidden = false
-                    } else {
-                        ctrl.isHidden = true
-                    }
-                }
+            if let clip = effectiveClipboard {
+                clipContainer.isHidden = true
+                clipboardPill.isHidden = false
+                clipboardDismissBtn.isHidden = false
+                clipboardDismissBtn.tintColor = subtleCol
+                let compact = bounds.height > 10 && bounds.height < 46.0
+                lastClipboardCompactLayout = compact
+                clipboardPill.configure(suggestion: clip, dark: dark, compactLandscape: compact)
             } else {
-                let items = state.candidates
-                ensureSlotCapacity(items.count)
-                for (i, ctrl) in slotControls.enumerated() {
-                    if i < items.count {
-                        let item = items[i]
-                        ctrl.slotIndex = i
-                        ctrl.starterWord = nil
-                        let attr = NSMutableAttributedString(
-                            string: item.text,
-                            attributes: [
-                                .font: UIFont.systemFont(ofSize: 19.5, weight: i == 0 ? .medium : .regular),
-                                .foregroundColor: textCol,
-                            ]
-                        )
-                        if !item.comment.isEmpty && (item.badgeKind == .typoCorrected || item.badgeKind == .pinyinLookup || item.badgeKind == .shortcode) {
-                            let cleanHint = item.badgeKind == .typoCorrected
-                                ? item.comment.components(separatedBy: " ").first ?? item.comment
-                                : item.comment
-                            attr.append(
-                                NSAttributedString(
-                                    string: " \(cleanHint)",
-                                    attributes: [
-                                        .font: UIFont.monospacedSystemFont(ofSize: 10.5, weight: .regular),
-                                        .foregroundColor: subtleCol,
-                                    ]
-                                )
+                clipContainer.isHidden = false
+                clipboardPill.isHidden = true
+                clipboardDismissBtn.isHidden = true
+                lastClipboardCompactLayout = nil
+
+                if isEmpty {
+                    let words = Self.starterWords
+                    ensureSlotCapacity(words.count)
+                    for (i, ctrl) in slotControls.enumerated() {
+                        if i < words.count {
+                            ctrl.slotIndex = i
+                            ctrl.starterWord = words[i]
+                            let attr = NSAttributedString(
+                                string: words[i],
+                                attributes: [
+                                    .font: UIFont.systemFont(ofSize: 19.5, weight: .regular),
+                                    .foregroundColor: textCol,
+                                ]
                             )
+                            ctrl.setRibbonTitle(attr)
+                            ctrl.isHidden = false
+                        } else {
+                            ctrl.isHidden = true
                         }
-                        ctrl.setRibbonTitle(attr)
-                        ctrl.isHidden = false
-                    } else {
-                        ctrl.isHidden = true
+                    }
+                } else {
+                    let items = state.candidates
+                    ensureSlotCapacity(items.count)
+                    for (i, ctrl) in slotControls.enumerated() {
+                        if i < items.count {
+                            let item = items[i]
+                            ctrl.slotIndex = i
+                            ctrl.starterWord = nil
+                            let attr = NSMutableAttributedString(
+                                string: item.text,
+                                attributes: [
+                                    .font: UIFont.systemFont(ofSize: 19.5, weight: i == 0 ? .medium : .regular),
+                                    .foregroundColor: textCol,
+                                ]
+                            )
+                            if !item.comment.isEmpty && (item.badgeKind == .typoCorrected || item.badgeKind == .pinyinLookup || item.badgeKind == .shortcode) {
+                                let cleanHint = item.badgeKind == .typoCorrected
+                                    ? item.comment.components(separatedBy: " ").first ?? item.comment
+                                    : item.comment
+                                attr.append(
+                                    NSAttributedString(
+                                        string: " \(cleanHint)",
+                                        attributes: [
+                                            .font: UIFont.monospacedSystemFont(ofSize: 10.5, weight: .regular),
+                                            .foregroundColor: subtleCol,
+                                        ]
+                                    )
+                                )
+                            }
+                            ctrl.setRibbonTitle(attr)
+                            ctrl.isHidden = false
+                        } else {
+                            ctrl.isHidden = true
+                        }
                     }
                 }
             }
@@ -391,6 +610,16 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
     @objc private func handleChevron() {
         onTapChevron?()
+    }
+
+    @objc private func handleClipboardTap() {
+        guard let suggestion = activeClipboardSuggestion else { return }
+        onSelectClipboard?(suggestion)
+    }
+
+    @objc private func handleClipboardDismiss() {
+        guard let suggestion = activeClipboardSuggestion else { return }
+        onDismissClipboard?(suggestion)
     }
 }
 
