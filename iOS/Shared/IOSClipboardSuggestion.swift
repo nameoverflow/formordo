@@ -315,6 +315,12 @@ public final class IOSClipboardSuggestionStore {
     private let store: IOSClipboardKeyValueStore
     public let ttlSeconds: TimeInterval
 
+    public enum LookupResult: Equatable, Sendable {
+        case none
+        case cached(IOSClipboardSuggestion)
+        case needsRead(changeCount: Int)
+    }
+
     public init(
         store: IOSClipboardKeyValueStore = UserDefaults.standard,
         ttlSeconds: TimeInterval = IOSClipboardSuggestionStore.defaultTTLSeconds
@@ -323,24 +329,26 @@ public final class IOSClipboardSuggestionStore {
         self.ttlSeconds = ttlSeconds
     }
 
-    public func refresh(
+    /// Non-blocking cache check: returns `.cached` if this `changeCount` was already read and is fresh,
+    /// `.none` if disabled/handled/empty/expired, or `.needsRead` when the caller should fetch
+    /// `UIPasteboard.general.string` asynchronously off the main thread.
+    public func lookup(
         hasFullAccess: Bool,
         enabled: Bool,
         hasStrings: Bool,
         changeCount: Int,
         prefersOTP: Bool,
-        now: TimeInterval,
-        readString: () -> String?
-    ) -> IOSClipboardSuggestion? {
+        now: TimeInterval
+    ) -> LookupResult {
         guard enabled, hasFullAccess else {
-            return nil
+            return .none
         }
 
         let handled: Int? = store.object(forKey: Keys.handledChangeCount) != nil
             ? store.integer(forKey: Keys.handledChangeCount)
             : nil
         if handled == changeCount {
-            return nil
+            return .none
         }
 
         let seen: Int? = store.object(forKey: Keys.seenChangeCount) != nil
@@ -353,30 +361,79 @@ public final class IOSClipboardSuggestionStore {
                 store.set(now, forKey: Keys.seenTimestamp)
                 store.removeObject(forKey: Keys.cachedRawText)
             }
-            return nil
+            return .none
         }
 
         if seen != changeCount {
-            let fetched = readString()
-            store.set(changeCount, forKey: Keys.seenChangeCount)
-            store.set(now, forKey: Keys.seenTimestamp)
-            if let fetched, !fetched.isEmpty {
-                store.set(fetched, forKey: Keys.cachedRawText)
-            } else {
-                store.removeObject(forKey: Keys.cachedRawText)
-            }
+            return .needsRead(changeCount: changeCount)
         }
 
         let firstSeen = store.double(forKey: Keys.seenTimestamp)
         let age = now - firstSeen
         if age > ttlSeconds || age < -60.0 {
-            return nil
+            return .none
         }
 
         guard let cached = store.string(forKey: Keys.cachedRawText), !cached.isEmpty else {
+            return .none
+        }
+        guard let parsed = IOSClipboardParser.parse(raw: cached, changeCount: changeCount, prefersOTP: prefersOTP) else {
+            return .none
+        }
+        return .cached(parsed)
+    }
+
+    /// Records the result of an asynchronous `UIPasteboard.general.string` read for `changeCount`.
+    /// Passing `nil` (e.g. user tapped "不允许粘贴") still marks `changeCount` as seen so we never re-prompt.
+    @discardableResult
+    public func recordRead(
+        changeCount: Int,
+        rawText: String?,
+        prefersOTP: Bool,
+        now: TimeInterval
+    ) -> IOSClipboardSuggestion? {
+        let handled: Int? = store.object(forKey: Keys.handledChangeCount) != nil
+            ? store.integer(forKey: Keys.handledChangeCount)
+            : nil
+        if handled == changeCount {
             return nil
         }
-        return IOSClipboardParser.parse(raw: cached, changeCount: changeCount, prefersOTP: prefersOTP)
+        store.set(changeCount, forKey: Keys.seenChangeCount)
+        store.set(now, forKey: Keys.seenTimestamp)
+        if let rawText, !rawText.isEmpty {
+            store.set(rawText, forKey: Keys.cachedRawText)
+            return IOSClipboardParser.parse(raw: rawText, changeCount: changeCount, prefersOTP: prefersOTP)
+        } else {
+            store.removeObject(forKey: Keys.cachedRawText)
+            return nil
+        }
+    }
+
+    public func refresh(
+        hasFullAccess: Bool,
+        enabled: Bool,
+        hasStrings: Bool,
+        changeCount: Int,
+        prefersOTP: Bool,
+        now: TimeInterval,
+        readString: () -> String?
+    ) -> IOSClipboardSuggestion? {
+        switch lookup(
+            hasFullAccess: hasFullAccess,
+            enabled: enabled,
+            hasStrings: hasStrings,
+            changeCount: changeCount,
+            prefersOTP: prefersOTP,
+            now: now
+        ) {
+        case .none:
+            return nil
+        case .cached(let suggestion):
+            return suggestion
+        case .needsRead(let cc):
+            let fetched = readString()
+            return recordRead(changeCount: cc, rawText: fetched, prefersOTP: prefersOTP, now: now)
+        }
     }
 
     public func consume(changeCount: Int) {

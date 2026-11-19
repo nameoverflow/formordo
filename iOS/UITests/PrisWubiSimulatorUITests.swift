@@ -506,9 +506,12 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         }
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        func acceptPastePromptIfShown() {
+        func acceptPastePromptIfShown(captureName: String? = nil) {
             let allowPaste = springboard.buttons["允许粘贴"].firstMatch
-            if allowPaste.waitForExistence(timeout: 1.5) {
+            if allowPaste.waitForExistence(timeout: 2.0) {
+                if let captureName {
+                    attachShot(name: captureName)
+                }
                 allowPaste.tap()
                 Thread.sleep(forTimeInterval: 0.4)
             }
@@ -521,7 +524,7 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         // 2. Copy a normal URL -> launch app -> centered clipboard pill appears -> tap inserts & dismisses
         UIPasteboard.general.string = "https://still.fail/docs/formordo"
         let app = openLiveKeyboard()
-        acceptPastePromptIfShown()
+        acceptPastePromptIfShown(captureName: "clip-00-during-paste-prompt")
         Thread.sleep(forTimeInterval: 0.5)
 
         let inputUI = XCUIApplication(bundleIdentifier: "com.apple.InputUI")

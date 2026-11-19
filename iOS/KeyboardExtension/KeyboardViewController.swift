@@ -21,7 +21,10 @@ public final class KeyboardViewController: UIInputViewController {
     private var planeBeforePress: IOSKeyPlane = .letters
     private var markedCode = ""
     private let clipboardStore = IOSClipboardSuggestionStore()
+    private let clipboardReadQueue = DispatchQueue(label: "com.priswubi.clipboard", qos: .userInitiated)
     private var activeClipboardSuggestion: IOSClipboardSuggestion?
+    private var inFlightClipboardChangeCount: Int?
+    private var hasAppeared = false
 
     private lazy var feedback = IOSKeyboardFeedbackController(attachingTo: keyCanvas)
 
@@ -49,7 +52,6 @@ public final class KeyboardViewController: UIInputViewController {
                 self.syncProxyTraits()
             }
         }
-        refreshClipboardSuggestion()
         syncEngineToUI()
     }
 
@@ -61,15 +63,24 @@ public final class KeyboardViewController: UIInputViewController {
         super.viewWillAppear(animated)
         feedback.prepare()
         bridge.loadConfigAndUser()
-        refreshClipboardSuggestion()
         applyDesiredTrayDimensions()
+        refreshClipboardSuggestion(allowAsyncRead: false)
         syncEngineToUI()
     }
 
     public override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        hasAppeared = true
         applyDesiredTrayDimensions()
+        refreshKeyboardLayout()
         disableTouchDelayOnContainerGestures()
+        // Trigger any uncached pasteboard read AFTER initial 4-row layout is on screen,
+        // so an iOS "Allow Paste" system alert never freezes mid-layout!
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.hasAppeared else { return }
+            self.refreshClipboardSuggestion(allowAsyncRead: true)
+            self.syncEngineToUI()
+        }
     }
 
     public override func updateViewConstraints() {
@@ -79,6 +90,7 @@ public final class KeyboardViewController: UIInputViewController {
 
     public override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        hasAppeared = false
         stopBackspaceRepeat()
         keyCanvas.resetAllTouches()
         calloutView.hideImmediately()
@@ -119,31 +131,63 @@ public final class KeyboardViewController: UIInputViewController {
 
     public override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
-        refreshClipboardSuggestion()
+        refreshClipboardSuggestion(allowAsyncRead: hasAppeared)
         syncProxyTraits()
     }
 
     @objc private func handlePasteboardChanged() {
-        refreshClipboardSuggestion()
+        refreshClipboardSuggestion(allowAsyncRead: hasAppeared)
         syncEngineToUI()
     }
 
-    private func refreshClipboardSuggestion() {
+    private func refreshClipboardSuggestion(allowAsyncRead: Bool) {
         guard self.hasFullAccess, bridge.prefs.clipboardSuggestion else {
             activeClipboardSuggestion = nil
             return
         }
         let pb = UIPasteboard.general
         let prefersOTP = (textDocumentProxy.textContentType == .oneTimeCode)
-        activeClipboardSuggestion = clipboardStore.refresh(
+        let now = Date().timeIntervalSince1970
+        let result = clipboardStore.lookup(
             hasFullAccess: true,
             enabled: true,
             hasStrings: pb.hasStrings,
             changeCount: pb.changeCount,
             prefersOTP: prefersOTP,
-            now: Date().timeIntervalSince1970,
-            readString: { pb.string }
+            now: now
         )
+        switch result {
+        case .none:
+            activeClipboardSuggestion = nil
+        case .cached(let suggestion):
+            activeClipboardSuggestion = suggestion
+        case .needsRead(let changeCount):
+            activeClipboardSuggestion = nil
+            guard allowAsyncRead, inFlightClipboardChangeCount != changeCount else { return }
+            inFlightClipboardChangeCount = changeCount
+            clipboardReadQueue.async { [weak self] in
+                // Perform blocking XPC pasteboard read off the main thread so an iOS system
+                // "Allow Paste" modal alert never stalls UIKit keyboard layout or rendering.
+                let fetched = UIPasteboard.general.string
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if self.inFlightClipboardChangeCount == changeCount {
+                        self.inFlightClipboardChangeCount = nil
+                    }
+                    let currentOTP = (self.textDocumentProxy.textContentType == .oneTimeCode)
+                    let suggestion = self.clipboardStore.recordRead(
+                        changeCount: changeCount,
+                        rawText: fetched,
+                        prefersOTP: currentOTP,
+                        now: Date().timeIntervalSince1970
+                    )
+                    if UIPasteboard.general.changeCount == changeCount {
+                        self.activeClipboardSuggestion = suggestion
+                        self.syncEngineToUI()
+                    }
+                }
+            }
+        }
     }
 
     private func setupViews() {
@@ -625,7 +669,7 @@ public final class KeyboardViewController: UIInputViewController {
     private func syncEngineToUI() {
         let st = bridge.state
         if st.preedit.isEmpty && activeClipboardSuggestion != nil {
-            refreshClipboardSuggestion()
+            refreshClipboardSuggestion(allowAsyncRead: false)
         }
         layoutEngine.asciiMode = st.asciiMode
         layoutEngine.schemaId = st.schemaId

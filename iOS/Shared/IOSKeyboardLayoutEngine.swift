@@ -173,8 +173,11 @@ public struct IOSKeyboardLayoutEngine: Equatable {
 
     public func computeLayout(in size: CGSize) -> LayoutSnapshot {
         let w = max(280, size.width)
-        let h = max(168, size.height)
         let isLandscape = w > 540
+        // Guard against transient full-screen container heights (e.g. 903pt before XPC heightConstraint settles
+        // or while a system paste-permission modal interrupts layout) so Row 0 never stretches to fill the tray.
+        let maxReasonableH: CGFloat = isLandscape ? 220.0 : 225.0
+        let h = min(max(168, size.height), maxReasonableH)
 
         // Exact iOS 26 proportions (`440pt` -> outerMargin `6.67pt`, gapX `6.00pt`, keyW `37.27pt`, pitchX `43.27pt`,
         // `keyH = 45.0pt`, `rowGap = 11.0pt`, total `53 + 220 = 273pt` matching native `608..881pt` tray).

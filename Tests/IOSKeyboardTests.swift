@@ -271,6 +271,22 @@ struct IOSKeyboardTests {
         let parsedPrefs = WubiPreferences.fromTOML(prefs.toTOML())
         assert(parsedPrefs.clipboardSuggestion == false)
 
+        // 12. Guard against transient full-screen bounds (e.g. 440x903 while paste alert interrupts layout):
+        //     keyH must stay clamped <= 48pt and all 4 rows must remain inside the 220pt visible tray!
+        let transientSnap = layout.computeLayout(in: CGSize(width: 440, height: 903))
+        let transientQ = transientSnap.keys.first(where: { $0.kind == .letter(UInt8(ascii: "q")) })!
+        let transientSpace = transientSnap.keys.first(where: { $0.kind == .space })!
+        assert(transientQ.frame.height <= 48.0, "Row 0 must never stretch on transient full-screen height, got \(transientQ.frame.height)")
+        assert(transientSpace.frame.maxY <= 220.0, "All 4 rows must fit within 220pt visible tray, space.maxY=\(transientSpace.frame.maxY)")
+
+        // 13. Non-blocking 2-step lookup + denied read (`nil`) suppresses repeat paste prompts for same changeCount
+        let lookupNeeds = clipStore.lookup(hasFullAccess: true, enabled: true, hasStrings: true, changeCount: 12, prefersOTP: false, now: 1400)
+        assert(lookupNeeds == .needsRead(changeCount: 12))
+        let denied = clipStore.recordRead(changeCount: 12, rawText: nil, prefersOTP: false, now: 1401)
+        assert(denied == nil)
+        let afterDenied = clipStore.lookup(hasFullAccess: true, enabled: true, hasStrings: true, changeCount: 12, prefersOTP: false, now: 1405)
+        assert(afterDenied == .none, "Denied pasteboard read must not re-prompt for same changeCount")
+
         print("✓ All iOS 26 native grid, lowercase/shift, trackpad, ergonomic Y-bias, dynamic next-key & clipboard tests passed!")
     }
 }

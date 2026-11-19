@@ -41,7 +41,7 @@ targets:
         PrisWubiSettingsGroup: $(AppIdentifierPrefix)com.hcyue.priswubi.settings
         CFBundleDisplayName: 形序
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "7"
+        CFBundleVersion: "8"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -90,7 +90,7 @@ targets:
         PrisWubiSettingsGroup: $(AppIdentifierPrefix)com.hcyue.priswubi.settings
         CFBundleDisplayName: 形序
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "7"
+        CFBundleVersion: "8"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.keyboard-service
           NSExtensionPrincipalClass: KeyboardViewController
