@@ -24,6 +24,7 @@
 ## 构建与验证
 
 ```sh
+make dicts         # 从 Resources/RawTables/ 重新编译 Resources/Dicts/ 二进制词典（字节级可复现）
 make test          # 运行 Rust 核心测试 + macOS Swift 桥接测试 + iOS 键盘几何与剪贴板测试
 make app           # 编译并签名 macOS 输入法 build/PrisWubi.app
 make install       # 安装并注册至 ~/Library/Input Methods/PrisWubi.app
@@ -35,3 +36,12 @@ make ios-previews  # 渲染 iPhone 2x Retina 虚拟键盘与宿主 App 预览图
 
 ### 真机 / 模拟器运行 iOS 端
 在装有完整 `Xcode.app` 的 Mac 上打开 `iOS/PrisWubi.xcodeproj`，选择 `PrisWubiApp` Scheme 并在 Signing & Capabilities 选定你的开发 Team，按 `⌘R` 即可自动触发 `iOS/Scripts/build-rust-ios.sh` 编译 Rust 静态库并安装到 iPhone 或模拟器。
+
+## 词库来源与开源协议
+
+`Resources/Dicts/` 中的二进制词典与拼音/Bigram 索引由 `Resources/RawTables/` 中的第三方开源词表经 `Core/src/bin/build_dicts.rs` 编译生成，所有原始词表及协议原文均已随仓库提供，详见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)：
+
+- **五笔 86 码表**：[rime/rime-wubi](https://github.com/rime/rime-wubi)（`LGPL-3.0`）
+- **五笔 98 码表**：[lotem/rime-wubi98](https://github.com/lotem/rime-wubi98)（`GPL-3.0`）
+- **新世纪（06）五笔码表**：[g178253/rime-wubi06](https://github.com/g178253/rime-wubi06)（`Apache-2.0`）
+- **拼音反查与规范字表**：[mozillazg/pinyin-data](https://github.com/mozillazg/pinyin-data)（`MIT`）

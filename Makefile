@@ -2,7 +2,7 @@
 
 CERT_NAME ?= Talus Local Code Signing
 CODESIGN_IDENTITY ?= auto
-RAW_TABLES_DIR ?= ../raw-tables
+RAW_TABLES_DIR ?= Resources/RawTables
 
 export MACOSX_DEPLOYMENT_TARGET := 14.0
 MACOS_TARGET = -target arm64-apple-macosx14.0
