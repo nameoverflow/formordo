@@ -23,7 +23,22 @@
    - 协议：MIT License (`MIT`)，Copyright (c) 2016 mozillazg，协议原文见 `Resources/RawTables/pinyin/LICENSE`。
    - 原始数据整合自 [Unicode Unihan Database](https://www.unicode.org/reports/tr38/)（`kTGHZ2013` / `kMandarin` 等字段）及《通用规范汉字表》（2013 年版）。
 
+## 纠错语言模型统计语料来源（`wubi_aux.wbaux` `WBAUX002`）
+
+`Resources/Dicts/wubi_aux.wbaux` 中的字级 Unigram、Bigram PMI 与 Trigram 残差统计表（不包含任何原始语料原文，仅保留聚合频次/对数概率统计）由 `Scripts/prepare_corpus.py` 与 `Core/src/bin/train_lm.rs` 基于以下多域中文语料（40% 正式书面 / 30% 社区问答 / 30% 社交短评，另含 2.5% Rime 词表回退）训练并经 `build-dicts --corpus-lm` 编译生成：
+
+| 语料分组 | 上游数据集 | 采样规模（训练汉字） | 上游协议声明 | 分发/商用合规提示 |
+| --- | --- | --- | --- | --- |
+| 正式书面 (Formal) | [wikimedia/wikipedia (`20231101.zh`)](https://huggingface.co/datasets/wikimedia/wikipedia) | 20.00M（繁转简并过滤自动生成小条目） | `CC-BY-SA-4.0` & `GFDL` | 需署名；统计派生权重建议保留来源说明 |
+| 社区问答 (Community) | [KrisTHL181/zhihu-qa](https://huggingface.co/datasets/KrisTHL181/zhihu-qa)（筛 2025–2026） | 16.00M | `ODC-BY` | 需署名；原始抓取内容受平台条款约束 |
+| 社区问答 (Community) | [nlgandnlu/ZHIHU-16K](https://github.com/nlgandnlu/ZHIHU-16K) | 6.00M | 未显式声明（学术公开） | 仅建议研究/个人评估使用 |
+| 社交口语 (Social) | [Orphanage/Baidu_Tieba_KangYaBeiGuo](https://huggingface.co/datasets/Orphanage/Baidu_Tieba_KangYaBeiGuo) | 2.01M | 卡片标 `MIT` / README 标 `CC-BY-NC-4.0` | **含非商用限制**，公开发布商业版本前请核查或替换 |
+| 社交口语 (Social) | [FreshCrawl/rednote-xiaohongshu-notes](https://huggingface.co/datasets/FreshCrawl/rednote-xiaohongshu-notes) | 1.49M | `Research-only`（非商用研究） | **仅限非商用研究**，公开发布商业版本前需剥离或替换 |
+| 社交口语 (Social) | [xinjiexinjie/socialbots](https://github.com/xinjiexinjie/socialbots)（2025 小红书评论） | 0.38M | 未显式声明（学术公开） | 仅建议研究/个人评估使用 |
+
+> 若需构建严格纯宽松协议的独立版 `wubi_aux.wbaux`（不引入任何外部社区/社交语料），可直接运行 `make dicts`（不传 `FORMORDO_CORPUS_LM`），退回仅由 `Resources/RawTables/` 生成的基础 Bigram 统计。
+
 ## 派生二进制产物与协议兼容性提示
 
 - `Resources/Dicts/wubi86.wbdict`、`wubi98.wbdict`、`wubi06.wbdict` 分别是对应原始码表的直接二进制索引编译产物，沿用各自原始码表的开源协议（`LGPL-3.0` / `GPL-3.0` / `Apache-2.0`）。
-- `Resources/Dicts/wubi_aux.wbaux` 同时汇总了 `mozillazg/pinyin-data` 的拼音反查索引以及从三套五笔词表的多字词词频派生的 55,000 条字级 PMI Bigram。由于其中包含源自 `wubi98.dict.yaml`（`GPL-3.0`）的派生统计数据，整体分发 `Resources/Dicts/` 时需同时遵守 `GPL-3.0` / `LGPL-3.0` / `Apache-2.0` / `MIT` 各自条款（保留版权与协议声明，并提供对应的原始码表与构建脚本 `Core/src/bin/build_dicts.rs`，均已完整收录于本仓库）。
+- `Resources/Dicts/wubi_aux.wbaux`（`WBAUX002`）汇总了 `mozillazg/pinyin-data` 的拼音反查索引、三套五笔词表的回退统计，以及上述多域语料派生的 7,330 条 Unigram、260,000 条 Bigram PMI 与 150,000 条 Trigram 残差统计。分发 `Resources/Dicts/` 时需同时遵守 `GPL-3.0` / `LGPL-3.0` / `Apache-2.0` / `MIT` 条款，并留意上表所列社区/社交语料的非商用/研究用途限制（公开发布商业 App Store 版本前建议替换为明确可商用的授权语料重新执行 `train_lm` + `build-dicts --corpus-lm`）。

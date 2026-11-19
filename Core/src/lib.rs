@@ -13,8 +13,8 @@ mod tests {
     use crate::config::{FourthEmptyBehavior, WubiConfig, WubiSchema};
     use crate::engine::{CandidateBadge, WubiEngine, KEY_SPACE};
     use crate::format::{
-        serialize_wbaux, serialize_wbdict, AuxBuildInput, AuxView, CharMeta, DictBuildInput,
-        DictView, ENTRY_FLAG_SINGLE_CHAR,
+        pack_trigram, serialize_wbaux, serialize_wbdict, AuxBuildInput, AuxView, CharMeta,
+        DictBuildInput, DictView, ENTRY_FLAG_SINGLE_CHAR, WBAUX_MAGIC,
     };
 
     fn build_sample_dict_86() -> DictView {
@@ -225,6 +225,7 @@ mod tests {
         AuxView::from_bytes(serialize_wbaux(AuxBuildInput {
             pinyin_items,
             bigrams,
+            ..Default::default()
         }))
         .unwrap()
     }
@@ -418,5 +419,92 @@ mod tests {
         let empty4 = engine.handle_key_event(0, Some('p'), false, 3050);
         assert!(empty4.bell);
         assert_eq!(empty4.preedit, "ppp");
+    }
+
+    #[test]
+    fn wbaux_v2_unigram_trigram_and_context_reset() {
+        let tri_entry = pack_trigram('输', '入', '法', (3.4 * 256.0) as u16).unwrap();
+        let bg_key = (('入' as u64) << 32) | ('法' as u64);
+        let aux = AuxView::from_bytes(serialize_wbaux(AuxBuildInput {
+            pinyin_items: vec![],
+            unigrams: vec![
+                ('输' as u32, (6.5 * 256.0) as u16),
+                ('入' as u32, (7.0 * 256.0) as u16),
+                ('法' as u32, (8.2 * 256.0) as u16),
+                ('䇂' as u32, (1.0 * 256.0) as u16),
+            ],
+            bigrams: vec![(bg_key, (2.2 * 256.0) as u16)],
+            trigrams: vec![tri_entry],
+        }))
+        .unwrap();
+
+        assert!(aux.has_unigrams());
+        assert_eq!(aux.stats(), (0, 4, 1, 1));
+        assert!((aux.unigram_prior('法').unwrap() - 8.2).abs() < 0.02);
+        assert!((aux.bigram_boost('入', '法') - 2.2).abs() < 0.02);
+        assert!((aux.trigram_boost('输', '入', '法') - 3.4).abs() < 0.02);
+        assert_eq!(aux.trigram_boost('我', '入', '法'), 0.0);
+
+        let mut engine = WubiEngine::new(WubiConfig::default());
+        engine.load_dict(WubiSchema::Wubi86, build_sample_dict_86());
+        engine.set_aux(aux);
+
+        // Commit "输入" (`lwgl`), then slip `u`->`i` border (6.46, 0.02) on `ifcy` ("法") vs `ufcy` ("䇂")
+        for ch in ['l', 'w', 'g', 'l'] {
+            let _ = engine.handle_key_event(0, Some(ch), false, 100);
+        }
+        let _ = engine.push_touch_letter(b'u', 6.46, 0.02, true, 200);
+        let _ = engine.push_touch_letter(b'f', 3.50, 1.00, true, 260);
+        let _ = engine.push_touch_letter(b'c', 3.50, 2.00, true, 320);
+        let _ = engine.push_touch_letter(b'y', 5.00, 0.00, true, 380);
+        assert_eq!(engine.page_candidates()[0].text, "法");
+        let conf_with_ctx = engine.page_candidates()[0].confidence;
+
+        // Committing punctuation (',') resets rolling context so prior sentence does not leak
+        engine.clear_composition();
+        let punc_out = engine.handle_key_event(0, Some(','), false, 450);
+        assert_eq!(punc_out.commit_text, "，");
+        let _ = engine.push_touch_letter(b'u', 6.46, 0.02, true, 500);
+        let _ = engine.push_touch_letter(b'f', 3.50, 1.00, true, 560);
+        let _ = engine.push_touch_letter(b'c', 3.50, 2.00, true, 620);
+        let _ = engine.push_touch_letter(b'y', 5.00, 0.00, true, 680);
+        let conf_after_punc = engine
+            .page_candidates()
+            .iter()
+            .find(|c| c.text == "法")
+            .map(|c| c.confidence)
+            .unwrap_or(0.0);
+        assert!(
+            conf_with_ctx > conf_after_punc,
+            "expected higher confidence with '输入' trigram context ({}) than after punctuation reset ({})",
+            conf_with_ctx,
+            conf_after_punc
+        );
+    }
+
+    #[test]
+    fn wbaux_v1_backward_compat() {
+        // Synthesize a minimal valid legacy WBAUX001 blob (48-byte header + 1 bigram entry)
+        let mut blob = Vec::new();
+        blob.extend_from_slice(WBAUX_MAGIC);
+        blob.extend_from_slice(&0u32.to_le_bytes()); // py_bucket_cnt (8)
+        blob.extend_from_slice(&0u32.to_le_bytes()); // py_item_cnt (12)
+        blob.extend_from_slice(&1u32.to_le_bytes()); // bigram_cnt (16)
+        blob.extend_from_slice(&48u32.to_le_bytes()); // py_buckets_off (20)
+        blob.extend_from_slice(&48u32.to_le_bytes()); // py_items_off (24)
+        blob.extend_from_slice(&48u32.to_le_bytes()); // bg_off (28)
+        blob.extend_from_slice(&58u32.to_le_bytes()); // pool_off (32)
+        blob.extend_from_slice(&0u32.to_le_bytes()); // pool_len (36)
+        blob.extend_from_slice(&[0u8; 8]); // v1 header padding (40..48)
+        assert_eq!(blob.len(), 48);
+        let pair_key = (('入' as u64) << 32) | ('法' as u64);
+        blob.extend_from_slice(&pair_key.to_le_bytes());
+        blob.extend_from_slice(&(768u16).to_le_bytes()); // 3.0 nats
+
+        let aux = AuxView::from_bytes(blob).unwrap();
+        assert!(!aux.has_unigrams());
+        assert_eq!(aux.stats(), (0, 0, 1, 0));
+        assert!((aux.bigram_boost('入', '法') - 3.0).abs() < 0.01);
+        assert_eq!(aux.trigram_boost('输', '入', '法'), 0.0);
     }
 }

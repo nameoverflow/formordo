@@ -24,8 +24,18 @@ fn real_dicts_latency_schemas_and_typo_correction() {
     let d06 = DictView::open_mmap(dir.join("wubi06.wbdict")).unwrap();
     let aux = AuxView::open_mmap(dir.join("wubi_aux.wbaux")).unwrap();
     let mmap_us = t0.elapsed().as_micros();
-    println!("Cold-start mmap of 86 + 98 + 06 + aux took: {} us", mmap_us);
+    let (py_cnt, uni_cnt, bi_cnt, tri_cnt) = aux.stats();
+    println!(
+        "Cold-start mmap of 86 + 98 + 06 + aux (py={}, uni={}, bi={}, tri={}) took: {} us",
+        py_cnt, uni_cnt, bi_cnt, tri_cnt, mmap_us
+    );
     assert!(mmap_us < 10_000, "mmap should be sub-millisecond to few ms");
+    assert!(aux.has_unigrams(), "expected WBAUX002 with corpus unigrams");
+    assert!(uni_cnt >= 5_000 && bi_cnt >= 200_000 && tri_cnt >= 100_000);
+    assert!(aux.trigram_boost('输', '入', '法') > 0.5);
+    assert!(aux.trigram_boost('小', '红', '书') > 0.5);
+    assert!(aux.trigram_boost('大', '模', '型') > 0.5);
+    assert!(aux.trigram_boost('性', '价', '比') > 0.5);
 
     // Verify authentic differences across 86, 98, and 06 (新世纪)!
     // E.g. '码': 86 = dcg, 98 = dcg, '软': 86 = lqw, 98 = lqw; '气': 86 = rnb, 98 = rty, 06 = rty/rn...

@@ -5,6 +5,7 @@ use std::path::Path;
 
 pub const WBDICT_MAGIC: &[u8; 8] = b"WBDICT01";
 pub const WBAUX_MAGIC: &[u8; 8] = b"WBAUX001";
+pub const WBAUX_MAGIC_V2: &[u8; 8] = b"WBAUX002";
 
 pub const ENTRY_FLAG_SINGLE_CHAR: u16 = 1 << 0;
 pub const ENTRY_FLAG_EXT_RARE: u16 = 1 << 1;
@@ -517,19 +518,40 @@ impl DictView {
 }
 
 // ============================================================================
-// Shared Auxiliary Index (.wbaux): Pinyin Reverse Lookup + Quantized Bigram LM
+// Shared Auxiliary Index (.wbaux): Pinyin Reverse Lookup + Quantized N-gram LM
 // ============================================================================
 
-const AUX_HEADER_LEN: usize = 48;
+const AUX_HEADER_LEN_V1: usize = 48;
+const AUX_HEADER_LEN_V2: usize = 64;
 const PY_BUCKET_STRIDE: usize = 12; // py_packed: u32, start: u32, count: u16, pad: u16
 const PY_ITEM_STRIDE: usize = 12;   // cp: u32, weight: u32, py_str_off: u16, py_str_len: u16
 const BIGRAM_STRIDE: usize = 10;    // pair_key: u64, log_boost_q8: u16
+const UNIGRAM_STRIDE: usize = 6;    // cp: u32, log_prior_q8: u16
+const TRIGRAM_STRIDE: usize = 8;    // packed u64: (c0<<48)|(c1<<32)|(c2<<16)|boost_q8
 
+/// Pack a BMP character trigram + Q8 boost into a single 64-bit integer.
+/// Returns `None` if any character is outside the Basic Multilingual Plane (`> 0xFFFF`).
+#[inline]
+pub fn pack_trigram(c0: char, c1: char, c2: char, boost_q8: u16) -> Option<u64> {
+    let u0 = c0 as u32;
+    let u1 = c1 as u32;
+    let u2 = c2 as u32;
+    if u0 > 0xFFFF || u1 > 0xFFFF || u2 > 0xFFFF {
+        return None;
+    }
+    Some(((u0 as u64) << 48) | ((u1 as u64) << 32) | ((u2 as u64) << 16) | (boost_q8 as u64))
+}
+
+#[derive(Default)]
 pub struct AuxBuildInput {
     /// `(pinyin_ascii, pinyin_display, codepoint, weight)`
     pub pinyin_items: Vec<(PackedPinyin, String, u32, u32)>,
     /// `(((prev_cp as u64) << 32) | (next_cp as u64), log_boost_q8)`
     pub bigrams: Vec<(u64, u16)>,
+    /// `(codepoint, shifted_log_prior_q8)` where `score = (ln P(c) + 14.0).clamp(0.0, 14.0)`
+    pub unigrams: Vec<(u32, u16)>,
+    /// Packed BMP trigrams from `pack_trigram(c0, c1, c2, residual_boost_q8)`
+    pub trigrams: Vec<u64>,
 }
 
 pub fn serialize_wbaux(mut input: AuxBuildInput) -> Vec<u8> {
@@ -538,8 +560,25 @@ pub fn serialize_wbaux(mut input: AuxBuildInput) -> Vec<u8> {
         .sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.3.cmp(&a.3)).then_with(|| a.2.cmp(&b.2)));
     input.pinyin_items.dedup_by(|a, b| a.0 == b.0 && a.2 == b.2);
 
-    input.bigrams.sort_by_key(|x| x.0);
+    // Sort bigrams by key ASC, keeping highest boost on duplicate keys
+    input
+        .bigrams
+        .sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
     input.bigrams.dedup_by_key(|x| x.0);
+
+    // Sort unigrams by codepoint ASC, keeping highest prior on duplicate codepoints
+    input
+        .unigrams
+        .sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+    input.unigrams.dedup_by_key(|x| x.0);
+
+    // Sort trigrams by 48-bit key ASC, keeping highest boost on duplicate keys
+    input.trigrams.sort_by(|a, b| {
+        (a >> 16)
+            .cmp(&(b >> 16))
+            .then_with(|| (b & 0xFFFF).cmp(&(a & 0xFFFF)))
+    });
+    input.trigrams.dedup_by_key(|x| *x >> 16);
 
     let mut py_str_map = std::collections::HashMap::<String, (u16, u16)>::new();
     let mut py_pool = Vec::<u8>::new();
@@ -585,13 +624,26 @@ pub fn serialize_wbaux(mut input: AuxBuildInput) -> Vec<u8> {
         bg_buf.extend_from_slice(&boost.to_le_bytes());
     }
 
-    let py_buckets_off = AUX_HEADER_LEN as u32;
+    let mut uni_buf = Vec::<u8>::with_capacity(input.unigrams.len() * UNIGRAM_STRIDE);
+    for (cp, prior) in &input.unigrams {
+        uni_buf.extend_from_slice(&cp.to_le_bytes());
+        uni_buf.extend_from_slice(&prior.to_le_bytes());
+    }
+
+    let mut tri_buf = Vec::<u8>::with_capacity(input.trigrams.len() * TRIGRAM_STRIDE);
+    for packed in &input.trigrams {
+        tri_buf.extend_from_slice(&packed.to_le_bytes());
+    }
+
+    let py_buckets_off = AUX_HEADER_LEN_V2 as u32;
     let py_items_off = py_buckets_off + py_buckets.len() as u32;
     let bg_off = py_items_off + py_items.len() as u32;
     let pool_off = bg_off + bg_buf.len() as u32;
+    let unigram_off = pool_off + py_pool.len() as u32;
+    let trigram_off = unigram_off + uni_buf.len() as u32;
 
-    let mut out = Vec::<u8>::with_capacity(pool_off as usize + py_pool.len());
-    out.extend_from_slice(WBAUX_MAGIC);
+    let mut out = Vec::<u8>::with_capacity(trigram_off as usize + tri_buf.len());
+    out.extend_from_slice(WBAUX_MAGIC_V2);
     out.extend_from_slice(&py_bucket_count.to_le_bytes());
     out.extend_from_slice(&(input.pinyin_items.len() as u32).to_le_bytes());
     out.extend_from_slice(&(input.bigrams.len() as u32).to_le_bytes());
@@ -600,13 +652,19 @@ pub fn serialize_wbaux(mut input: AuxBuildInput) -> Vec<u8> {
     out.extend_from_slice(&bg_off.to_le_bytes());
     out.extend_from_slice(&pool_off.to_le_bytes());
     out.extend_from_slice(&(py_pool.len() as u32).to_le_bytes());
-    while out.len() < AUX_HEADER_LEN {
+    out.extend_from_slice(&(input.unigrams.len() as u32).to_le_bytes());
+    out.extend_from_slice(&unigram_off.to_le_bytes());
+    out.extend_from_slice(&(input.trigrams.len() as u32).to_le_bytes());
+    out.extend_from_slice(&trigram_off.to_le_bytes());
+    while out.len() < AUX_HEADER_LEN_V2 {
         out.push(0);
     }
     out.extend_from_slice(&py_buckets);
     out.extend_from_slice(&py_items);
     out.extend_from_slice(&bg_buf);
     out.extend_from_slice(&py_pool);
+    out.extend_from_slice(&uni_buf);
+    out.extend_from_slice(&tri_buf);
     out
 }
 
@@ -615,11 +673,15 @@ pub struct AuxView {
     py_bucket_count: usize,
     py_item_count: usize,
     bigram_count: usize,
+    unigram_count: usize,
+    trigram_count: usize,
     py_buckets_off: usize,
     py_items_off: usize,
     bg_off: usize,
     pool_off: usize,
     pool_len: usize,
+    unigram_off: usize,
+    trigram_off: usize,
 }
 
 impl AuxView {
@@ -633,10 +695,23 @@ impl AuxView {
 
     pub fn from_source(buf: ByteSource) -> io::Result<Self> {
         let b = buf.as_slice();
-        if b.len() < AUX_HEADER_LEN || &b[0..8] != WBAUX_MAGIC {
+        if b.len() < AUX_HEADER_LEN_V1 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "invalid WBAUX header",
+            ));
+        }
+        let is_v2 = &b[0..8] == WBAUX_MAGIC_V2;
+        if !is_v2 && &b[0..8] != WBAUX_MAGIC {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid WBAUX header",
+            ));
+        }
+        if is_v2 && b.len() < AUX_HEADER_LEN_V2 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "truncated WBAUX002 header",
             ));
         }
         let py_bucket_count = read_u32(b, 8) as usize;
@@ -648,10 +723,23 @@ impl AuxView {
         let pool_off = read_u32(b, 32) as usize;
         let pool_len = read_u32(b, 36) as usize;
 
+        let (unigram_count, unigram_off, trigram_count, trigram_off) = if is_v2 {
+            (
+                read_u32(b, 40) as usize,
+                read_u32(b, 44) as usize,
+                read_u32(b, 48) as usize,
+                read_u32(b, 52) as usize,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
+
         if py_buckets_off + py_bucket_count * PY_BUCKET_STRIDE > b.len()
             || py_items_off + py_item_count * PY_ITEM_STRIDE > b.len()
             || bg_off + bigram_count * BIGRAM_STRIDE > b.len()
             || pool_off + pool_len > b.len()
+            || unigram_off + unigram_count * UNIGRAM_STRIDE > b.len()
+            || trigram_off + trigram_count * TRIGRAM_STRIDE > b.len()
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -664,12 +752,31 @@ impl AuxView {
             py_bucket_count,
             py_item_count,
             bigram_count,
+            unigram_count,
+            trigram_count,
             py_buckets_off,
             py_items_off,
             bg_off,
             pool_off,
             pool_len,
+            unigram_off,
+            trigram_off,
         })
+    }
+
+    #[inline]
+    pub fn has_unigrams(&self) -> bool {
+        self.unigram_count > 0
+    }
+
+    #[inline]
+    pub fn stats(&self) -> (usize, usize, usize, usize) {
+        (
+            self.py_item_count,
+            self.unigram_count,
+            self.bigram_count,
+            self.trigram_count,
+        )
     }
 
     /// Look up characters by Pinyin prefix (1..=6 ASCII letters), returning `(char, weight, pinyin_str, exact_match)`.
@@ -733,7 +840,33 @@ impl AuxView {
         results
     }
 
-    /// Returns corpus transition log-boost (in nats, `0.0 .. ~4.5`) from `prev_char` to `next_char`.
+    /// Returns modern corpus character unigram log-prior (`0.0 .. ~14.0`), or `None` if absent.
+    #[inline]
+    pub fn unigram_prior(&self, ch: char) -> Option<f32> {
+        if self.unigram_count == 0 {
+            return None;
+        }
+        let target = ch as u32;
+        let b = self.buf.as_slice();
+        let mut lo = 0usize;
+        let mut hi = self.unigram_count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let off = self.unigram_off + mid * UNIGRAM_STRIDE;
+            let cp = read_u32(b, off);
+            if cp < target {
+                lo = mid + 1;
+            } else if cp > target {
+                hi = mid;
+            } else {
+                let q8 = read_u16(b, off + 4);
+                return Some((q8 as f32) / 256.0);
+            }
+        }
+        None
+    }
+
+    /// Returns corpus transition log-boost (in nats, `0.0 .. ~5.5`) from `prev_char` to `next_char`.
     #[inline]
     pub fn bigram_boost(&self, prev_char: char, next_char: char) -> f32 {
         let key = ((prev_char as u64) << 32) | (next_char as u64);
@@ -750,6 +883,39 @@ impl AuxView {
                 hi = mid;
             } else {
                 let q8 = read_u16(b, off + 8);
+                return (q8 as f32) / 256.0;
+            }
+        }
+        0.0
+    }
+
+    /// Returns residual corpus trigram log-boost (in nats, over the bigram) for `(prev2, prev1) -> next_char`.
+    #[inline]
+    pub fn trigram_boost(&self, prev2: char, prev1: char, next_char: char) -> f32 {
+        if self.trigram_count == 0 {
+            return 0.0;
+        }
+        let u0 = prev2 as u32;
+        let u1 = prev1 as u32;
+        let u2 = next_char as u32;
+        if u0 > 0xFFFF || u1 > 0xFFFF || u2 > 0xFFFF {
+            return 0.0;
+        }
+        let target_key48 = ((u0 as u64) << 32) | ((u1 as u64) << 16) | (u2 as u64);
+        let b = self.buf.as_slice();
+        let mut lo = 0usize;
+        let mut hi = self.trigram_count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let off = self.trigram_off + mid * TRIGRAM_STRIDE;
+            let packed = read_u64(b, off);
+            let k = packed >> 16;
+            if k < target_key48 {
+                lo = mid + 1;
+            } else if k > target_key48 {
+                hi = mid;
+            } else {
+                let q8 = (packed & 0xFFFF) as u16;
                 return (q8 as f32) / 256.0;
             }
         }

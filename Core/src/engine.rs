@@ -55,12 +55,42 @@ pub const KEY_RIGHT: u16 = 0x7C;
 pub const KEY_PAGE_UP: u16 = 0x74;
 pub const KEY_PAGE_DOWN: u16 = 0x79;
 
+/// Calibrated weights combining spatial keystroke log-likelihood, lexical prior,
+/// and corpus N-gram context in the Bayesian typo decoder.
+#[derive(Clone, Copy, Debug)]
+pub struct LmWeights {
+    pub spatial_scale: f32,
+    pub dict_prior_scale: f32,
+    pub corpus_unigram_scale: f32,
+    pub internal_bigram_scale: f32,
+    pub bigram_scale: f32,
+    pub trigram_scale: f32,
+    pub cross_trigram_scale: f32,
+    pub phrase_bonus: f32,
+}
+
+impl Default for LmWeights {
+    fn default() -> Self {
+        Self {
+            spatial_scale: 2.35,
+            dict_prior_scale: 0.45,
+            corpus_unigram_scale: 0.58,
+            internal_bigram_scale: 0.35,
+            bigram_scale: 0.95,
+            trigram_scale: 1.00,
+            cross_trigram_scale: 0.65,
+            phrase_bonus: 0.65,
+        }
+    }
+}
+
 pub struct WubiEngine {
     pub dicts: [Option<DictView>; 3],
     pub aux: Option<AuxView>,
     pub config: WubiConfig,
     pub user: UserStore,
     pub key_layout: KeyLayout,
+    pub lm_weights: LmWeights,
 
     pub ascii_mode: bool,
     raw_code: String,
@@ -68,6 +98,7 @@ pub struct WubiEngine {
     candidates: Vec<Candidate>,
     page: usize,
     last_committed: String,
+    recent_context: Vec<char>,
     double_quote_open: bool,
     single_quote_open: bool,
 }
@@ -86,15 +117,40 @@ impl WubiEngine {
             config,
             user: UserStore::default(),
             key_layout: KeyLayout::default(),
+            lm_weights: LmWeights::default(),
             ascii_mode: false,
             raw_code: String::new(),
             observations: Vec::new(),
             candidates: Vec::new(),
             page: 0,
             last_committed: String::new(),
+            recent_context: Vec::with_capacity(8),
             double_quote_open: false,
             single_quote_open: false,
         }
+    }
+
+    /// Explicitly set rolling CJK context (e.g. from surrounding text or offline evaluation).
+    pub fn set_recent_context(&mut self, text: &str) {
+        self.recent_context.clear();
+        for ch in text.chars() {
+            if is_cjk_char(ch) {
+                self.recent_context.push(ch);
+            } else {
+                self.recent_context.clear();
+            }
+        }
+        if self.recent_context.len() > 8 {
+            let drain_n = self.recent_context.len() - 8;
+            self.recent_context.drain(..drain_n);
+        }
+        self.last_committed = self.recent_context.iter().collect();
+    }
+
+    /// Clear rolling sentence context (e.g. cursor jump or new text field).
+    pub fn clear_context(&mut self) {
+        self.recent_context.clear();
+        self.last_committed.clear();
     }
 
     pub fn load_dict(&mut self, schema: WubiSchema, dict: DictView) {
@@ -215,8 +271,12 @@ impl WubiEngine {
             }
             self.clear_composition();
             self.user.break_single_burst();
+            self.recent_context.clear();
         }
         self.ascii_mode = !self.ascii_mode;
+        if self.ascii_mode {
+            self.recent_context.clear();
+        }
         out
     }
 
@@ -367,6 +427,7 @@ impl WubiEngine {
             KEY_BACKSPACE => {
                 if self.raw_code.is_empty() {
                     self.user.break_single_burst();
+                    self.recent_context.clear();
                     return EngineOutput::default();
                 }
                 self.raw_code.pop();
@@ -396,11 +457,13 @@ impl WubiEngine {
             KEY_RETURN | KEY_ENTER_KP => {
                 if self.raw_code.is_empty() {
                     self.user.break_single_burst();
+                    self.recent_context.clear();
                     return EngineOutput::default();
                 }
                 let raw = self.raw_code.clone();
                 self.clear_composition();
                 self.user.break_single_burst();
+                self.recent_context.clear();
                 return EngineOutput {
                     consumed: true,
                     commit_text: raw,
@@ -410,6 +473,7 @@ impl WubiEngine {
             KEY_SPACE => {
                 if self.raw_code.is_empty() {
                     self.user.break_single_burst();
+                    self.recent_context.clear();
                     return EngineOutput::default();
                 }
                 if let Some(out) = self.select_page_candidate(0, timestamp_ms) {
@@ -466,6 +530,7 @@ impl WubiEngine {
         if c.is_ascii_uppercase() {
             if self.raw_code.is_empty() {
                 self.user.break_single_burst();
+                self.recent_context.clear();
                 return EngineOutput::default();
             }
             let mut committed = String::new();
@@ -476,6 +541,7 @@ impl WubiEngine {
             }
             self.clear_composition();
             self.user.break_single_burst();
+            self.recent_context.clear();
             committed.push(c);
             return EngineOutput {
                 consumed: true,
@@ -543,6 +609,7 @@ impl WubiEngine {
                     self.clear_composition();
                 }
                 self.user.break_single_burst();
+                self.recent_context.clear();
                 text.push_str(&mapped);
                 return EngineOutput {
                     consumed: true,
@@ -718,6 +785,17 @@ impl WubiEngine {
             }
         }
         self.last_committed = text.to_string();
+        for ch in text.chars() {
+            if is_cjk_char(ch) {
+                self.recent_context.push(ch);
+            } else {
+                self.recent_context.clear();
+            }
+        }
+        if self.recent_context.len() > 8 {
+            let drain_n = self.recent_context.len() - 8;
+            self.recent_context.drain(..drain_n);
+        }
     }
 
     fn manual_create_phrase_from_recent(&mut self) -> Option<EngineOutput> {
@@ -934,7 +1012,7 @@ impl WubiEngine {
         let Some(exact_code) = PackedCode::from_ascii(&self.raw_code) else {
             return;
         };
-        let prev_last_char = self.last_committed.chars().last();
+        let lm_w = self.lm_weights;
 
         // 1. Collect Exact Candidates (preserving canonical Wubi ordering!)
         struct ExactItem {
@@ -956,7 +1034,14 @@ impl WubiEngine {
             if !exact_seen.insert(utext.to_string()) {
                 continue;
             }
-            let ctx = compute_context_boost(&self.user, self.aux.as_ref(), &self.last_committed, prev_last_char, utext);
+            let ctx = compute_context_boost(
+                &self.user,
+                self.aux.as_ref(),
+                &self.last_committed,
+                &self.recent_context,
+                utext,
+                &lm_w,
+            );
             let post = 8.8 + ((ucnt as f32 + 1.0).ln() * 0.8) + ctx;
             let ord = if self.config.dynamic_word_freq {
                 1_000_000.0 + (ucnt as f64) * 100.0 + (ctx as f64) * 500.0 - (idx as f64)
@@ -1007,8 +1092,22 @@ impl WubiEngine {
                 }
             }
 
-            let ctx = compute_context_boost(&self.user, self.aux.as_ref(), &self.last_committed, prev_last_char, entry.text);
-            let prior = 0.52 * ((entry.weight as f32) + 50.0).ln();
+            let ctx = compute_context_boost(
+                &self.user,
+                self.aux.as_ref(),
+                &self.last_committed,
+                &self.recent_context,
+                entry.text,
+                &lm_w,
+            );
+            let prior = compute_candidate_prior(
+                self.aux.as_ref(),
+                entry.weight,
+                entry.text,
+                entry.is_single_char(),
+                exact_code.len(),
+                &lm_w,
+            );
             let post = prior + ctx;
 
             // Preserve #1 fixed muscle-memory slot unless dynamic freq is explicitly enabled for this kind!
@@ -1120,6 +1219,17 @@ impl WubiEngine {
                 }
             }
 
+            let spatial_scale = if self
+                .aux
+                .as_ref()
+                .map(|a| a.has_unigrams())
+                .unwrap_or(false)
+            {
+                lm_w.spatial_scale
+            } else {
+                2.05
+            };
+
             for h in hyps {
                 if h.kind == CorrectionKind::Exact || h.code == exact_code {
                     continue;
@@ -1129,9 +1239,16 @@ impl WubiEngine {
                     if !fuzzy_seen.insert(utext.to_string()) {
                         continue;
                     }
-                    let ctx = compute_context_boost(&self.user, self.aux.as_ref(), &self.last_committed, prev_last_char, utext);
+                    let ctx = compute_context_boost(
+                        &self.user,
+                        self.aux.as_ref(),
+                        &self.last_committed,
+                        &self.recent_context,
+                        utext,
+                        &lm_w,
+                    );
                     let prior = 9.0 + ((ucnt as f32 + 1.0).ln() * 0.75);
-                    let post = 2.05 * h.spatial_logp + prior + ctx;
+                    let post = spatial_scale * h.spatial_logp + prior + ctx;
                     fuzzy_items.push(FuzzyItem {
                         text: utext.to_string(),
                         code: h.code,
@@ -1141,22 +1258,39 @@ impl WubiEngine {
                     });
                 }
                 // Check top dictionary entries on neighbor hypothesis
-                for e in dict.lookup_exact(h.code, false).into_iter().take(2) {
+                for e in dict.lookup_exact(h.code, false).into_iter().take(4) {
                     if !fuzzy_seen.insert(e.text.to_string()) {
                         continue;
                     }
-                    // Skip zero-weight ultra-obscure items as typo rescue targets
+                    // Skip zero-weight ultra-obscure items unless modern corpus knows them well
                     if e.weight < 5_000 {
-                        continue;
+                        let known_modern = self
+                            .aux
+                            .as_ref()
+                            .and_then(|a| e.text.chars().next().and_then(|c| a.unigram_prior(c)))
+                            .map(|u| u >= 3.5)
+                            .unwrap_or(false);
+                        if !known_modern {
+                            continue;
+                        }
                     }
-                    let ctx = compute_context_boost(&self.user, self.aux.as_ref(), &self.last_committed, prev_last_char, e.text);
-                    let prior = 0.52 * ((e.weight as f32) + 50.0).ln();
-                    let phrase_bonus = if !e.is_single_char() && h.code.len() == 4 {
-                        0.65 // 4-letter phrases have much higher redundancy than random single chars!
-                    } else {
-                        0.0
-                    };
-                    let post = 2.05 * h.spatial_logp + prior + ctx + phrase_bonus;
+                    let ctx = compute_context_boost(
+                        &self.user,
+                        self.aux.as_ref(),
+                        &self.last_committed,
+                        &self.recent_context,
+                        e.text,
+                        &lm_w,
+                    );
+                    let prior = compute_candidate_prior(
+                        self.aux.as_ref(),
+                        e.weight,
+                        e.text,
+                        e.is_single_char(),
+                        h.code.len(),
+                        &lm_w,
+                    );
+                    let post = spatial_scale * h.spatial_logp + prior + ctx;
                     fuzzy_items.push(FuzzyItem {
                         text: e.text.to_string(),
                         code: h.code,
@@ -1268,16 +1402,101 @@ impl WubiEngine {
 }
 
 #[inline]
+fn is_cjk_char(ch: char) -> bool {
+    let u = ch as u32;
+    (0x4E00..=0x9FFF).contains(&u) || (0x3400..=0x4DBF).contains(&u)
+}
+
+#[inline]
+fn compute_candidate_prior(
+    aux: Option<&AuxView>,
+    dict_weight: u32,
+    cand_text: &str,
+    is_single_char: bool,
+    code_len: usize,
+    w: &LmWeights,
+) -> f32 {
+    let phrase_bonus = if !is_single_char && code_len == 4 {
+        w.phrase_bonus
+    } else {
+        0.0
+    };
+    let Some(aux_v) = aux.filter(|a| a.has_unigrams()) else {
+        // Legacy WBAUX001 fallback (no corpus unigram section)
+        return 0.52 * ((dict_weight as f32) + 50.0).ln() + phrase_bonus;
+    };
+
+    let dict_prior = w.dict_prior_scale * ((dict_weight as f32) + 50.0).ln();
+    let mut chars_buf = ['\0'; 8];
+    let mut n = 0usize;
+    for ch in cand_text.chars().take(8) {
+        chars_buf[n] = ch;
+        n += 1;
+    }
+    if n == 0 {
+        return dict_prior + phrase_bonus;
+    }
+
+    let mut uni_sum = 0.0f32;
+    for &ch in &chars_buf[..n] {
+        uni_sum += aux_v.unigram_prior(ch).unwrap_or(0.5);
+    }
+    let mean_uni = uni_sum / (n as f32);
+
+    let mut internal_cohesion = 0.0f32;
+    if n >= 2 {
+        let mut bg_sum = 0.0f32;
+        for i in 0..(n - 1) {
+            bg_sum += aux_v.bigram_boost(chars_buf[i], chars_buf[i + 1]);
+        }
+        internal_cohesion = (bg_sum / ((n - 1) as f32)).min(4.5);
+    }
+
+    dict_prior
+        + w.corpus_unigram_scale * mean_uni
+        + w.internal_bigram_scale * internal_cohesion
+        + phrase_bonus
+}
+
+#[inline]
 fn compute_context_boost(
     user: &UserStore,
     aux: Option<&AuxView>,
     last_committed: &str,
-    prev_last_char: Option<char>,
+    recent_context: &[char],
     cand_text: &str,
+    w: &LmWeights,
 ) -> f32 {
     let mut boost = user.context_boost(last_committed, cand_text);
-    if let (Some(aux_v), Some(p_ch), Some(n_ch)) = (aux, prev_last_char, cand_text.chars().next()) {
-        boost += 1.35 * aux_v.bigram_boost(p_ch, n_ch);
+    let Some(aux_v) = aux else {
+        return boost;
+    };
+    let Some(p1) = recent_context.last().copied() else {
+        return boost;
+    };
+    let mut cand_chars = cand_text.chars();
+    let Some(c0) = cand_chars.next() else {
+        return boost;
+    };
+
+    let bg = aux_v.bigram_boost(p1, c0);
+    if !aux_v.has_unigrams() {
+        // Legacy WBAUX001 scale
+        boost += 1.35 * bg;
+        return boost;
     }
+
+    let prev2 = if recent_context.len() >= 2 {
+        Some(recent_context[recent_context.len() - 2])
+    } else {
+        None
+    };
+    let tg1 = prev2.map(|p2| aux_v.trigram_boost(p2, p1, c0)).unwrap_or(0.0);
+    let tg_cross = cand_chars
+        .next()
+        .map(|c1| aux_v.trigram_boost(p1, c0, c1))
+        .unwrap_or(0.0);
+
+    boost += w.bigram_scale * bg + w.trigram_scale * tg1 + w.cross_trigram_scale * tg_cross;
     boost
 }

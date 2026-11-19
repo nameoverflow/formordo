@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use wubi_core::code::{PackedCode, PackedPinyin, Stem2};
 use wubi_core::format::{
-    serialize_wbaux, serialize_wbdict, AuxBuildInput, CharMeta, DictBuildInput,
+    pack_trigram, serialize_wbaux, serialize_wbdict, AuxBuildInput, CharMeta, DictBuildInput,
     ENTRY_FLAG_EXT_RARE, ENTRY_FLAG_SINGLE_CHAR, ENTRY_FLAG_SYMBOL,
 };
 
@@ -230,10 +230,90 @@ fn load_tghz_set(pinyin_dir: &PathBuf) -> HashSet<u32> {
     set
 }
 
+fn load_corpus_lm(dir: &Path) -> (Vec<(u32, u16)>, Vec<(u64, u16)>, Vec<u64>) {
+    let mut unigrams = Vec::new();
+    let uni_path = dir.join("unigrams.tsv");
+    if let Ok(content) = fs::read_to_string(&uni_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut it = line.split('\t');
+            let Some(ch_str) = it.next() else { continue };
+            let Some(sc_str) = it.next() else { continue };
+            let mut chars = ch_str.chars();
+            let (Some(ch), None) = (chars.next(), chars.next()) else {
+                continue;
+            };
+            if let Ok(score) = sc_str.parse::<f64>() {
+                let q8 = (score.clamp(0.0, 15.0) * 256.0).round() as u16;
+                unigrams.push((ch as u32, q8));
+            }
+        }
+    }
+
+    let mut bigrams = Vec::new();
+    let bg_path = dir.join("bigrams.tsv");
+    if let Ok(content) = fs::read_to_string(&bg_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut it = line.split('\t');
+            let Some(pair_str) = it.next() else { continue };
+            let Some(sc_str) = it.next() else { continue };
+            let mut chars = pair_str.chars();
+            let (Some(c1), Some(c2), None) = (chars.next(), chars.next(), chars.next()) else {
+                continue;
+            };
+            if let Ok(score) = sc_str.parse::<f64>() {
+                let q8 = (score.clamp(0.0, 6.0) * 256.0).round() as u16;
+                if q8 > 0 {
+                    let key = ((c1 as u64) << 32) | (c2 as u64);
+                    bigrams.push((key, q8));
+                }
+            }
+        }
+    }
+
+    let mut trigrams = Vec::new();
+    let tri_path = dir.join("trigrams.tsv");
+    if let Ok(content) = fs::read_to_string(&tri_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut it = line.split('\t');
+            let Some(tri_str) = it.next() else { continue };
+            let Some(sc_str) = it.next() else { continue };
+            let mut chars = tri_str.chars();
+            let (Some(c0), Some(c1), Some(c2), None) =
+                (chars.next(), chars.next(), chars.next(), chars.next())
+            else {
+                continue;
+            };
+            if let Ok(score) = sc_str.parse::<f64>() {
+                let q8 = (score.clamp(0.0, 6.0) * 256.0).round() as u16;
+                if q8 > 0 {
+                    if let Some(packed) = pack_trigram(c0, c1, c2, q8) {
+                        trigrams.push(packed);
+                    }
+                }
+            }
+        }
+    }
+
+    (unigrams, bigrams, trigrams)
+}
+
 fn build_aux_data(
     pinyin_dir: &PathBuf,
     global_char_weights: &HashMap<u32, u64>,
     all_phrases: &[(String, u64)],
+    corpus_lm_dir: Option<&Path>,
 ) -> AuxBuildInput {
     // 1. Parse kTGHZ2013.txt + pinyin.txt (BMP + TGHZ characters)
     let mut py_items = Vec::<(PackedPinyin, String, u32, u32)>::new();
@@ -289,7 +369,24 @@ fn build_aux_data(
         }
     }
 
-    // 2. Build character-transition Bigram log-PMI table from weighted phrase corpus + conversational transitions!
+    if let Some(lm_dir) = corpus_lm_dir {
+        let (unigrams, bigrams, trigrams) = load_corpus_lm(lm_dir);
+        println!(
+            "Loaded corpus LM from {}: {} unigrams, {} bigrams, {} trigrams",
+            lm_dir.display(),
+            unigrams.len(),
+            bigrams.len(),
+            trigrams.len()
+        );
+        return AuxBuildInput {
+            pinyin_items: py_items,
+            bigrams,
+            unigrams,
+            trigrams,
+        };
+    }
+
+    // 2. Fallback: Build character-transition Bigram log-PMI table from weighted phrase corpus + conversational transitions
     let mut pair_mass: HashMap<u64, f64> = HashMap::new();
     let mut left_mass: HashMap<u32, f64> = HashMap::new();
     let mut right_mass: HashMap<u32, f64> = HashMap::new();
@@ -380,17 +477,44 @@ fn build_aux_data(
     AuxBuildInput {
         pinyin_items: py_items,
         bigrams,
+        unigrams: Vec::new(),
+        trigrams: Vec::new(),
     }
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
-        eprintln!("Usage: build-dicts <raw-tables-dir> <output-dicts-dir>");
+        eprintln!(
+            "Usage: build-dicts <raw-tables-dir> <output-dicts-dir> [--corpus-lm <dir>] [--aux-only]"
+        );
         std::process::exit(1);
     }
     let raw_dir = PathBuf::from(&args[1]);
     let out_dir = PathBuf::from(&args[2]);
+    let mut corpus_lm_dir: Option<PathBuf> = env::var("FORMORDO_CORPUS_LM")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    let mut aux_only = false;
+
+    let mut i = 3;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--corpus-lm" if i + 1 < args.len() => {
+                corpus_lm_dir = Some(PathBuf::from(&args[i + 1]));
+                i += 2;
+            }
+            "--aux-only" => {
+                aux_only = true;
+                i += 1;
+            }
+            other => {
+                eprintln!("Unknown argument: {}", other);
+                std::process::exit(1);
+            }
+        }
+    }
     fs::create_dir_all(&out_dir).expect("failed to create output dir");
 
     let pinyin_dir = raw_dir.join("pinyin");
@@ -417,34 +541,45 @@ fn main() {
         }
         all_phrases.extend(parsed.phrase_weights);
 
-        let entry_cnt = parsed.entries.len();
-        let char_cnt = parsed.char_metas.len();
-        let blob = serialize_wbdict(DictBuildInput {
-            schema_id,
-            entries: parsed.entries,
-            char_metas: parsed.char_metas,
-        });
-        let out_path = out_dir.join(out_name);
-        fs::write(&out_path, &blob).expect("failed to write wbdict");
-        println!(
-            "Built {} ({:.2} MB): {} entries, {} chars",
-            out_name,
-            blob.len() as f64 / (1024.0 * 1024.0),
-            entry_cnt,
-            char_cnt
-        );
+        if !aux_only {
+            let entry_cnt = parsed.entries.len();
+            let char_cnt = parsed.char_metas.len();
+            let blob = serialize_wbdict(DictBuildInput {
+                schema_id,
+                entries: parsed.entries,
+                char_metas: parsed.char_metas,
+            });
+            let out_path = out_dir.join(out_name);
+            fs::write(&out_path, &blob).expect("failed to write wbdict");
+            println!(
+                "Built {} ({:.2} MB): {} entries, {} chars",
+                out_name,
+                blob.len() as f64 / (1024.0 * 1024.0),
+                entry_cnt,
+                char_cnt
+            );
+        }
     }
 
-    let aux_input = build_aux_data(&pinyin_dir, &global_char_weights, &all_phrases);
+    let aux_input = build_aux_data(
+        &pinyin_dir,
+        &global_char_weights,
+        &all_phrases,
+        corpus_lm_dir.as_deref(),
+    );
     let py_cnt = aux_input.pinyin_items.len();
+    let uni_cnt = aux_input.unigrams.len();
     let bg_cnt = aux_input.bigrams.len();
+    let tri_cnt = aux_input.trigrams.len();
     let aux_blob = serialize_wbaux(aux_input);
     let aux_path = out_dir.join("wubi_aux.wbaux");
     fs::write(&aux_path, &aux_blob).expect("failed to write wbaux");
     println!(
-        "Built wubi_aux.wbaux ({:.2} MB): {} pinyin mappings, {} bigrams",
+        "Built wubi_aux.wbaux ({:.2} MB): {} pinyin, {} unigrams, {} bigrams, {} trigrams",
         aux_blob.len() as f64 / (1024.0 * 1024.0),
         py_cnt,
-        bg_cnt
+        uni_cnt,
+        bg_cnt,
+        tri_cnt
     );
 }
