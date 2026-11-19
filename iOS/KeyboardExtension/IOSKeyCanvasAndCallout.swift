@@ -471,7 +471,9 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     private func purgeEndedOrOrphanTouches() {
         let stale = trackedTouches.compactMap { id, state -> ObjectIdentifier? in
             guard let t = state.touch else { return id }
-            if t.phase == .ended || t.phase == .cancelled { return id }
+            if state.committedByRollover && (t.phase == .ended || t.phase == .cancelled) {
+                return id
+            }
             return nil
         }
         for id in stale {
@@ -604,7 +606,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
             if isSpace {
                 spaceHoldTimer?.invalidate()
                 spaceHoldTouchId = id
-                let timer = Timer(timeInterval: 0.28, repeats: false) { [weak self] _ in
+                let timer = Timer(timeInterval: 0.42, repeats: false) { [weak self] _ in
                     MainActor.assumeIsolated {
                         guard let self,
                               let activeId = self.spaceHoldTouchId,
@@ -802,12 +804,14 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 continue
             }
 
-            // Distinguish brief stationary edge-gated taps (`drift <= 14pt`, `dt <= 0.22s`, e.g. iOS screen-edge
-            // or bottom-dock gesture gates) from real scroll/dismiss swipes (`drift > 14pt`):
+            // Distinguish stationary/slight-roll edge-gated taps (e.g. iOS screen-edge or bottom-dock
+            // gesture gates near Spacebar) from real scroll/dismiss swipes:
             let pt = touch.location(in: self)
             let drift = hypot(pt.x - state.initialPoint.x, pt.y - state.initialPoint.y)
             let dt = max(0, touch.timestamp - state.beganTimestamp)
-            if !isHidden && drift <= 14.0 && dt <= 0.22 {
+            let maxDrift: CGFloat = state.startedOnSpace ? 32.0 : 26.0
+            let maxDt: TimeInterval = state.startedOnSpace ? 0.40 : 0.35
+            if !isHidden && drift <= maxDrift && dt <= maxDt && pt.y >= -44.0 {
                 rescuedAny = true
                 onKeyTouchUp?(state.initialKey, state.initialPoint)
             }

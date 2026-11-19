@@ -457,11 +457,11 @@ public struct IOSKeyboardLayoutEngine: Equatable {
             return nil
         }
 
-        // Apply ergonomic upward compensation strictly inside the 3 letter/symbol rows (never on Row 3
+        // Apply ergonomic upward compensation strictly inside the 3 letter/symbol rows (never near Row 3
         // `Space`/`123`/`Return`, so top-edge Space taps never get pulled into `c`/`v`/`b`/`n`!).
         var qPt = point
         let row0MidY = CGFloat(snapshot.originY)
-        if point.y > row0MidY && point.y < snapshot.bottomRowMinY - 2.5 {
+        if point.y > row0MidY && point.y < snapshot.bottomRowMinY - 6.0 {
             qPt.y -= ergonomicThumbYBias
         }
 
@@ -475,12 +475,20 @@ public struct IOSKeyboardLayoutEngine: Equatable {
 
         var best: IOSKeySpec?
         var bestScore = CGFloat.greatestFiniteMagnitude
-        let maxLetterBottomY = snapshot.bottomRowMinY - 4.0
+        let maxLetterBottomY = snapshot.bottomRowMinY - 7.5
 
         for k in snapshot.keys {
             var effRect = k.frame
             var deadKeyPenalty: CGFloat = 0
-            if hasDynamicWeights, case .letter(let ascii) = k.kind, ascii >= 97, ascii <= 122 {
+            if k.kind == .space {
+                // Give Spacebar a 2.5pt top cushion so slightly high thumb taps don't misfire into Row 2 during 简码.
+                effRect = CGRect(
+                    x: k.frame.minX,
+                    y: k.frame.minY - 2.5,
+                    width: k.frame.width,
+                    height: k.frame.height + 2.5
+                )
+            } else if hasDynamicWeights, case .letter(let ascii) = k.kind, ascii >= 97, ascii <= 122 {
                 let bit = UInt32(1) << UInt32(ascii - 97)
                 if (validNextMask & bit) != 0 {
                     // Dynamically expand valid Wubi continuation keys into letter gutters without encroaching on Spacebar
