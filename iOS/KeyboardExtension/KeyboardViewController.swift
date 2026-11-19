@@ -23,6 +23,7 @@ public final class KeyboardViewController: UIInputViewController {
     private var autoSpaceTracker = AutoSpaceContextTracker()
     private var compositionBaseContext: String?
     private let clipboardStore = IOSClipboardSuggestionStore()
+    private var clipboardGate = IOSClipboardVisibilityGate()
     private let clipboardReadQueue = DispatchQueue(label: "com.priswubi.clipboard", qos: .userInitiated)
     private var activeClipboardSuggestion: IOSClipboardSuggestion?
     private var inFlightClipboardChangeCount: Int?
@@ -67,6 +68,7 @@ public final class KeyboardViewController: UIInputViewController {
         bridge.loadConfigAndUser()
         autoSpaceTracker.invalidate()
         compositionBaseContext = nil
+        clipboardGate.resetForKeyboardAppearance()
         applyDesiredTrayDimensions()
         syncContextFromProxyIfIdle()
         refreshClipboardSuggestion(allowAsyncRead: false)
@@ -151,19 +153,29 @@ public final class KeyboardViewController: UIInputViewController {
         syncEngineToUI()
     }
 
+    private func markUserTypedForClipboard() {
+        clipboardGate.markUserTyped()
+        activeClipboardSuggestion = nil
+    }
+
     private func refreshClipboardSuggestion(allowAsyncRead: Bool) {
         guard self.hasFullAccess, bridge.prefs.clipboardSuggestion else {
             activeClipboardSuggestion = nil
             return
         }
         let pb = UIPasteboard.general
+        let changeCount = pb.changeCount
+        guard clipboardGate.shouldAllowDisplay(for: changeCount) else {
+            activeClipboardSuggestion = nil
+            return
+        }
         let prefersOTP = (textDocumentProxy.textContentType == .oneTimeCode)
         let now = Date().timeIntervalSince1970
         let result = clipboardStore.lookup(
             hasFullAccess: true,
             enabled: true,
             hasStrings: pb.hasStrings,
-            changeCount: pb.changeCount,
+            changeCount: changeCount,
             prefersOTP: prefersOTP,
             now: now
         )
@@ -192,7 +204,8 @@ public final class KeyboardViewController: UIInputViewController {
                         prefersOTP: currentOTP,
                         now: Date().timeIntervalSince1970
                     )
-                    if UIPasteboard.general.changeCount == changeCount {
+                    if UIPasteboard.general.changeCount == changeCount,
+                       self.clipboardGate.shouldAllowDisplay(for: changeCount) {
                         self.activeClipboardSuggestion = suggestion
                         self.syncEngineToUI()
                     }
@@ -386,6 +399,7 @@ public final class KeyboardViewController: UIInputViewController {
             guard let self else { return }
             self.keyCanvas.flushPendingTouches()
             self.feedback.fireSoftStep(playClick: true)
+            self.markUserTypedForClipboard()
             let out = self.bridge.selectCandidate(pageRelIndex: relIdx, timestampMs: Self.nowMs())
             self.applyEngineState(out)
         }
@@ -394,6 +408,7 @@ public final class KeyboardViewController: UIInputViewController {
             guard let self else { return }
             self.keyCanvas.flushPendingTouches()
             self.feedback.fireSoftStep(playClick: true)
+            self.markUserTypedForClipboard()
             self.insertTextWithAutoSpace(word, splitInternal: true)
             self.bridge.acceptPrediction(word, timestampMs: Self.nowMs())
             self.scheduleUserDataFlush()
@@ -404,9 +419,9 @@ public final class KeyboardViewController: UIInputViewController {
             guard let self else { return }
             self.keyCanvas.flushPendingTouches()
             self.feedback.fireSoftStep(playClick: true)
+            self.markUserTypedForClipboard()
             self.insertTextWithAutoSpace(suggestion.insertText, splitInternal: false)
             self.clipboardStore.consume(changeCount: suggestion.changeCount)
-            self.activeClipboardSuggestion = nil
             self.syncEngineToUI()
         }
 
@@ -436,6 +451,7 @@ public final class KeyboardViewController: UIInputViewController {
         expandedGrid.onSelectAbsCandidate = { [weak self] absIdx in
             guard let self else { return }
             self.feedback.fireSoftStep(playClick: true)
+            self.markUserTypedForClipboard()
             self.expandedGrid.isHidden = true
             self.keyCanvas.isHidden = false
             self.ribbonView.setExpanded(false)
@@ -479,6 +495,7 @@ public final class KeyboardViewController: UIInputViewController {
     private func handleKeyRelease(spec: IOSKeySpec, pointInCanvas: CGPoint) {
         switch spec.kind {
         case .letter(let ascii):
+            markUserTypedForClipboard()
             if layoutEngine.asciiMode || layoutEngine.shiftState.isUppercase {
                 commitPendingFirstIfComposing()
                 let ch = String(UnicodeScalar(ascii))
@@ -499,6 +516,7 @@ public final class KeyboardViewController: UIInputViewController {
             }
 
         case .symbol(let sym):
+            markUserTypedForClipboard()
             commitPendingFirstIfComposing()
             if AutoSpaceFormatter.isAutoSpaceRightTrigger(sym, options: AutoSpaceOptions(prefs: bridge.prefs)) {
                 insertTextWithAutoSpace(sym, splitInternal: false)
@@ -540,6 +558,7 @@ public final class KeyboardViewController: UIInputViewController {
             applyEngineState(out)
 
         case .space:
+            markUserTypedForClipboard()
             if bridge.state.preedit.isEmpty {
                 autoSpaceTracker.recordPassthrough(
                     " ",
@@ -555,6 +574,7 @@ public final class KeyboardViewController: UIInputViewController {
             }
 
         case .returnKey:
+            markUserTypedForClipboard()
             if bridge.state.preedit.isEmpty {
                 autoSpaceTracker.recordPassthrough(
                     "\n",
@@ -581,6 +601,7 @@ public final class KeyboardViewController: UIInputViewController {
     }
 
     private func performBackspace(acceleratedChunk: Bool = false) {
+        markUserTypedForClipboard()
         if !bridge.state.preedit.isEmpty {
             let out = bridge.handleKey(keyCode: 0x33, scalar: 0, hasCmdOrCtrl: false, timestampMs: Self.nowMs())
             applyEngineState(out)

@@ -450,3 +450,29 @@ public final class IOSClipboardSuggestionStore {
         store.removeObject(forKey: Keys.cachedRawText)
     }
 }
+
+/// Controls session-level visibility of the clipboard pill:
+/// only shows right after a fresh copy (`changeCount` change) or right after opening/switching to a text field
+/// before any typing/editing occurs; hides for the remainder of that typing session once the user inputs text.
+public struct IOSClipboardVisibilityGate: Equatable, Sendable {
+    private var lastObservedChangeCount: Int? = nil
+    public private(set) var isSuppressedByTyping: Bool = false
+
+    public init() {}
+
+    public mutating func resetForKeyboardAppearance() {
+        isSuppressedByTyping = false
+    }
+
+    public mutating func markUserTyped() {
+        isSuppressedByTyping = true
+    }
+
+    public mutating func shouldAllowDisplay(for changeCount: Int) -> Bool {
+        if lastObservedChangeCount != changeCount {
+            lastObservedChangeCount = changeCount
+            isSuppressedByTyping = false
+        }
+        return !isSuppressedByTyping
+    }
+}

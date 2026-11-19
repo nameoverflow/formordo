@@ -330,6 +330,20 @@ struct IOSKeyboardTests {
         bridge.setContext("大模型，")
         assert(bridge.predictNextWords(maxCount: 8) == starters, "Punctuation must reset idle predictions to starters")
 
+        // 15. Clipboard visibility gate: show only right after fresh copy or app switch before typing;
+        //     hide for the rest of the session once the user types anything.
+        var clipGate = IOSClipboardVisibilityGate()
+        assert(clipGate.shouldAllowDisplay(for: 20) == true)
+        clipGate.markUserTyped()
+        assert(clipGate.shouldAllowDisplay(for: 20) == false, "Must stay hidden after typing in same session")
+        // Fresh copy (new changeCount) lifts suppression immediately
+        assert(clipGate.shouldAllowDisplay(for: 21) == true, "Fresh copy must allow display again")
+        clipGate.markUserTyped()
+        assert(clipGate.shouldAllowDisplay(for: 21) == false)
+        // Switching app / reopening keyboard (`viewWillAppear`) resets typing suppression
+        clipGate.resetForKeyboardAppearance()
+        assert(clipGate.shouldAllowDisplay(for: 21) == true, "App switch before typing must allow display again")
+
         print("✓ All iOS 26 native grid, lowercase/shift, trackpad, ergonomic Y-bias, dynamic next-key, clipboard & idle N-gram prediction tests passed!")
     }
 }
