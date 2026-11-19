@@ -175,12 +175,14 @@ public struct IOSKeyboardLayoutEngine: Equatable {
         let h = max(168, size.height)
         let isLandscape = w > 540
 
-        // Exact iOS 26 proportions (`440pt` -> outerMargin `6.67pt`, gapX `6.67pt`, keyW `36.67pt`, pitchX `43.33pt`)
+        // Exact iOS 26 proportions (`440pt` -> outerMargin `6.67pt`, gapX `6.67pt`, keyW `36.67pt`, pitchX `43.33pt`).
+        // Give Row 3 (`Space`/`123`/`Return`) a generous `6.5pt` bottom catch-margin inside the `219pt` XPC viewport
+        // while keeping `keyH = 45.0pt` (`219 - 2.5 - 6.5 - 10*3 = 180 = 4 * 45`) and total height `263pt` unchanged!
         let outerX: CGFloat = isLandscape ? 8.0 : round(w * (20.0 / 1320.0) * 3.0) / 3.0
         let gapX: CGFloat = isLandscape ? 7.0 : round(w * (20.0 / 1320.0) * 3.0) / 3.0
-        let topPad: CGFloat = isLandscape ? 3.0 : 4.0
-        let bottomPad: CGFloat = isLandscape ? 3.0 : 2.0
-        let rowGap: CGFloat = isLandscape ? 8.0 : 11.0
+        let topPad: CGFloat = isLandscape ? 2.5 : 2.5
+        let bottomPad: CGFloat = isLandscape ? 4.5 : 6.5
+        let rowGap: CGFloat = isLandscape ? 8.0 : 10.0
 
         let usableH = h - topPad - bottomPad - rowGap * 3.0
         let keyH = max(34.0, floor(usableH / 4.0))
@@ -453,15 +455,28 @@ public struct IOSKeyboardLayoutEngine: Equatable {
         in snapshot: LayoutSnapshot,
         validNextMask: UInt32 = 0x03FF_FFFF
     ) -> IOSKeySpec? {
-        guard snapshot.bounds.insetBy(dx: -16, dy: -16).contains(point) else {
+        guard snapshot.bounds.insetBy(dx: -18, dy: -28).contains(point) else {
             return nil
         }
 
-        // Apply ergonomic upward compensation strictly inside the 3 letter/symbol rows (never near Row 3
-        // `Space`/`123`/`Return`, so top-edge Space taps never get pulled into `c`/`v`/`b`/`n`!).
+        // 1. Functional keys (`Space`, `⌫`, `⇧`, `123`, `中/英`, `Globe`, `Return`) are checked against
+        //    unbiased `point` first so top-edge taps on `⌫`/`⇧`/`Space` are never pulled up into letters.
+        for k in snapshot.keys {
+            switch k.kind {
+            case .letter, .symbol:
+                continue
+            default:
+                if k.frame.contains(point) {
+                    return k
+                }
+            }
+        }
+
+        // 2. Apply ergonomic upward compensation strictly inside the 3 letter/symbol rows (never near Row 3
+        //    `Space`/`123`/`Return`, so top-edge Space taps never get pulled into `c`/`v`/`b`/`n`!).
         var qPt = point
         let row0MidY = CGFloat(snapshot.originY)
-        if point.y > row0MidY && point.y < snapshot.bottomRowMinY - 6.0 {
+        if point.y > row0MidY && point.y < snapshot.bottomRowMinY - 5.0 {
             qPt.y -= ergonomicThumbYBias
         }
 
@@ -471,47 +486,91 @@ public struct IOSKeyboardLayoutEngine: Equatable {
             if let direct = snapshot.keys.first(where: { $0.frame.contains(qPt) }) {
                 return direct
             }
+        } else {
+            // Sacred Keycap Core: any tap landing cleanly inside the visual interior (`>= 3.0pt` from X bevel,
+            // `>= 2.6pt` from Y bevel) ALWAYS belongs to that keycap even if `validNextMask` marks it 0
+            // (e.g. 5th-code push-commit or 4th-code completion after an earlier key slip).
+            // Dynamic weighting only arbitrates border/bevel (`0..3pt`) & inter-key gutter taps!
+            for k in snapshot.keys {
+                switch k.kind {
+                case .letter:
+                    if k.frame.insetBy(dx: 3.0, dy: 2.6).contains(qPt) {
+                        return k
+                    }
+                case .symbol:
+                    if k.frame.contains(qPt) {
+                        return k
+                    }
+                default:
+                    break
+                }
+            }
         }
 
         var best: IOSKeySpec?
         var bestScore = CGFloat.greatestFiniteMagnitude
-        let maxLetterBottomY = snapshot.bottomRowMinY - 7.5
+        let maxLetterBottomY = snapshot.bottomRowMinY - 6.0
 
         for k in snapshot.keys {
             var effRect = k.frame
             var deadKeyPenalty: CGFloat = 0
-            if k.kind == .space {
-                // Give Spacebar a 2.5pt top cushion so slightly high thumb taps don't misfire into Row 2 during 简码.
+            var evalPt = qPt
+
+            switch k.kind {
+            case .space:
+                // Evaluate Row 3 against raw `point` and give Spacebar generous top (`4.5pt`), side (`2.2pt`),
+                // and bottom (`10pt`) cushions so light grazing thumb taps on any rim of Spacebar never miss!
+                evalPt = point
+                effRect = CGRect(
+                    x: k.frame.minX - 2.2,
+                    y: k.frame.minY - 4.5,
+                    width: k.frame.width + 4.4,
+                    height: k.frame.height + 14.5
+                )
+            case .planeSwitch(_, let lbl) where k.frame.minY >= snapshot.bottomRowMinY - 1.0 && lbl != "#+=":
+                evalPt = point
+                effRect = CGRect(
+                    x: k.frame.minX - 2.0,
+                    y: k.frame.minY - 3.0,
+                    width: k.frame.width + 2.0,
+                    height: k.frame.height + 12.0
+                )
+            case .modeToggle, .globe, .returnKey:
+                evalPt = point
                 effRect = CGRect(
                     x: k.frame.minX,
-                    y: k.frame.minY - 2.5,
+                    y: k.frame.minY - 3.0,
                     width: k.frame.width,
-                    height: k.frame.height + 2.5
+                    height: k.frame.height + 12.0
                 )
-            } else if hasDynamicWeights, case .letter(let ascii) = k.kind, ascii >= 97, ascii <= 122 {
+            case .shift, .backspace:
+                evalPt = point
+            case .letter(let ascii) where hasDynamicWeights && ascii >= 97 && ascii <= 122:
                 let bit = UInt32(1) << UInt32(ascii - 97)
                 if (validNextMask & bit) != 0 {
                     // Dynamically expand valid Wubi continuation keys into letter gutters without encroaching on Spacebar
-                    effRect = effRect.insetBy(dx: -4.8, dy: -3.4)
+                    effRect = effRect.insetBy(dx: -4.8, dy: -3.2)
                     if effRect.maxY > maxLetterBottomY {
                         effRect.size.height = max(k.frame.height, maxLetterBottomY - effRect.minY)
                     }
                 } else {
-                    effRect = effRect.insetBy(dx: 4.5, dy: 3.0)
-                    deadKeyPenalty = 4.0
+                    effRect = effRect.insetBy(dx: 2.8, dy: 2.2)
+                    deadKeyPenalty = 4.2
                 }
+            default:
+                break
             }
 
-            let dx = max(effRect.minX - qPt.x, 0, qPt.x - effRect.maxX)
-            let dy = max(effRect.minY - qPt.y, 0, qPt.y - effRect.maxY)
+            let dx = max(effRect.minX - evalPt.x, 0, evalPt.x - effRect.maxX)
+            let dy = max(effRect.minY - evalPt.y, 0, evalPt.y - effRect.maxY)
             let score: CGFloat
             if dx == 0 && dy == 0 {
                 // Point is inside `effRect`: negative signed depth to nearest edge breaks ties cleanly!
                 let innerDepth = min(
-                    qPt.x - effRect.minX,
-                    effRect.maxX - qPt.x,
-                    qPt.y - effRect.minY,
-                    effRect.maxY - qPt.y
+                    evalPt.x - effRect.minX,
+                    effRect.maxX - evalPt.x,
+                    evalPt.y - effRect.minY,
+                    effRect.maxY - evalPt.y
                 )
                 score = -innerDepth + deadKeyPenalty * 0.25
             } else {

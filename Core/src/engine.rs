@@ -301,20 +301,12 @@ impl WubiEngine {
         let reported_lower = reported_ch.to_ascii_lowercase();
         let adapted_ch = if !is_normalized && reported_lower.is_ascii_lowercase() {
             // View-space UI hit-testing (`IOSKeyboardLayoutEngine.hitTest`) already resolved
-            // rectangular keycaps, ergonomic thumb Y-bias, and `valid_next_mask` — and showed
-            // the callout bubble for `reported_lower`. Keep `reported_lower` whenever `(nx, ny)`
-            // lies within its keycap/expanded neighborhood so staggered neighbor rows (`e` vs `d`)
-            // never silently hijack a corner tap away from what the callout displayed.
-            let (cx, cy) = self.key_layout.center_of(reported_lower);
-            let d2 = (nx - cx).powi(2) + (ny - cy).powi(2);
-            if d2 <= 0.68 * 0.68 {
-                reported_lower
-            } else if self.config.typo.enabled && self.config.typo.touch_hitbox_adapt {
-                self.key_layout
-                    .nearest_key(nx, ny, &self.user.touch_profile, true)
-            } else {
-                reported_lower
-            }
+            // rectangular keycaps, side margins, ergonomic thumb Y-bias, and `valid_next_mask` —
+            // and showed the callout bubble for `reported_lower`. Always keep `reported_lower` as
+            // the primary observation while still storing exact `(nx, ny)` in `KeyObs::touch` for
+            // 2D Gaussian typo rescue (`generate_hypotheses`), so outer-margin/corner taps (e.g.
+            // beside `z` or `m`) never silently mutate away from what the callout displayed.
+            reported_lower
         } else if self.config.typo.enabled && self.config.typo.touch_hitbox_adapt {
             let nearest = self
                 .key_layout

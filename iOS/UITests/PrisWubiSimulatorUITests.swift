@@ -111,6 +111,8 @@ final class PrisWubiSimulatorUITests: XCTestCase {
             }
         }
         let backspaceKey = snapshot.keys.first { $0.kind == .backspace }!
+        committed = ""
+        releasedKeys = []
         let deleteTouch = SyntheticFingerTouch()
         deleteTouch.mockPoint = CGPoint(x: backspaceKey.frame.midX, y: backspaceKey.frame.midY)
         deleteTouch.mockTimestamp = 212.0
@@ -125,6 +127,51 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         canvas.touchesEnded([deleteTouch, flick], with: nil)
         XCTAssertEqual(releasedKeys, [.backspace, .letter(UInt8(ascii: "t"))])
         XCTAssertEqual(committed, "t")
+
+        // 6. Letter lift-roll onto Backspace (`m` -> `⌫` after 130ms) or Spacebar (`v` -> `Space` after 130ms)
+        //    must NEVER hijack or silently drop the pressed letter!
+        committed = ""
+        releasedKeys = []
+        let mKey = snapshot.keys.first { $0.primaryLabel == "m" }!
+        let vKey = snapshot.keys.first { $0.primaryLabel == "v" }!
+        let spaceKey = snapshot.keys.first { $0.kind == .space }!
+
+        let mTouch = SyntheticFingerTouch()
+        mTouch.mockPoint = CGPoint(x: mKey.frame.midX, y: mKey.frame.midY)
+        mTouch.mockTimestamp = 220.0
+        canvas.touchesBegan([mTouch], with: nil)
+        mTouch.mockPoint = CGPoint(x: backspaceKey.frame.midX, y: backspaceKey.frame.midY)
+        mTouch.mockTimestamp = 220.13
+        canvas.touchesMoved([mTouch], with: nil)
+        mTouch.mockTimestamp = 220.14
+        canvas.touchesEnded([mTouch], with: nil)
+        XCTAssertEqual(releasedKeys, [.letter(UInt8(ascii: "m"))], "Lift-roll from 'm' onto Backspace must commit 'm', never silently drop")
+
+        releasedKeys = []
+        let vTouch = SyntheticFingerTouch()
+        vTouch.mockPoint = CGPoint(x: vKey.frame.midX, y: vKey.frame.midY)
+        vTouch.mockTimestamp = 221.0
+        canvas.touchesBegan([vTouch], with: nil)
+        vTouch.mockPoint = CGPoint(x: spaceKey.frame.midX, y: spaceKey.frame.midY)
+        vTouch.mockTimestamp = 221.13
+        canvas.touchesMoved([vTouch], with: nil)
+        vTouch.mockTimestamp = 221.14
+        canvas.touchesEnded([vTouch], with: nil)
+        XCTAssertEqual(releasedKeys, [.letter(UInt8(ascii: "v"))], "Lift-roll from 'v' onto Spacebar must commit 'v'")
+
+        // 7. Fast horizontal sweep across Spacebar cancelled by bottom system gesture gate (`dx = 36pt, dy = 3pt`)
+        //    rescues Space cleanly!
+        releasedKeys = []
+        let spTouch = SyntheticFingerTouch()
+        spTouch.mockPoint = CGPoint(x: spaceKey.frame.midX - 20.0, y: spaceKey.frame.midY + 4.0)
+        spTouch.mockTimestamp = 222.0
+        canvas.touchesBegan([spTouch], with: nil)
+        spTouch.mockPoint = CGPoint(x: spaceKey.frame.midX + 16.0, y: spaceKey.frame.midY + 7.0)
+        spTouch.mockTimestamp = 222.09
+        canvas.touchesMoved([spTouch], with: nil)
+        spTouch.mockTimestamp = 222.10
+        canvas.touchesCancelled([spTouch], with: nil)
+        XCTAssertEqual(releasedKeys, [.space], "Horizontal Spacebar sweep cancelled by bottom gesture gate must rescue Space")
     }
 
     @MainActor

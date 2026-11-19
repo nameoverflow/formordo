@@ -81,14 +81,50 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// Pass touches in the bottom `6pt` empty margin (`y = 38..44`, below candidate glyphs) straight
-    /// through to Row 0 (`q..p`) so slightly high thumb strikes on top-row Wubi keys never get swallowed.
+    /// Pass touches in the bottom `7pt` strip (`y = 37..44`, below candidate glyphs) and in the lower half
+    /// (`y = 20..44`) of unoccupied trailing candidate-bar space straight through to Row 0 (`q..p`),
+    /// while preserving full `0..44pt` hit area on `chevronBtn` and eliminating inter-slot dead gaps.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard bounds.contains(point) else { return false }
         if !chevronBtn.isHidden && point.x >= divider.frame.minX - 4.0 {
             return true
         }
-        return point.y <= bounds.height - 6.0
+        if point.y > bounds.height - 7.0 {
+            return false
+        }
+        let availW = clipContainer.bounds.width
+        let hasScrollableOverflow = contentWidth > availW + 2.0
+        if !hasScrollableOverflow {
+            let maxVisibleMaxX = slotControls
+                .lazy
+                .filter { !$0.isHidden }
+                .map { $0.frame.maxX - self.scrollOffsetX }
+                .max() ?? 0
+            if point.x > maxVisibleMaxX + 10.0 && point.y >= 20.0 {
+                return false
+            }
+        }
+        return true
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let hit = super.hitTest(point, with: event) else { return nil }
+        if hit === clipContainer || hit === contentTrack {
+            let trackPt = convert(point, to: contentTrack)
+            var nearestSlot: IOSRibbonSlotControl?
+            var bestDx = CGFloat.greatestFiniteMagnitude
+            for slot in slotControls where !slot.isHidden {
+                let dx = max(slot.frame.minX - trackPt.x, 0, trackPt.x - slot.frame.maxX)
+                if dx <= 8.0 && dx < bestDx {
+                    bestDx = dx
+                    nearestSlot = slot
+                }
+            }
+            if let nearestSlot {
+                return nearestSlot
+            }
+        }
+        return hit
     }
 
     private func setupViews() {
@@ -150,7 +186,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
         guard contentWidth > clipContainer.bounds.width + 2.0 else { return false }
         let vel = pan.velocity(in: clipContainer)
-        return abs(vel.x) > abs(vel.y)
+        return abs(vel.x) > abs(vel.y) * 1.2
     }
 
     @objc private func handleHorizontalPan(_ pan: UIPanGestureRecognizer) {

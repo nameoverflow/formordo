@@ -123,6 +123,36 @@ struct IOSKeyboardTests {
         let spaceHit = IOSKeyboardLayoutEngine.hitTest(point: topEdgeSpaceTap, in: snap, validNextMask: kState.validNextMask)
         assert(spaceHit?.kind == .space, "Expected top-edge Spacebar tap during short-code composing to hit Space, got \(String(describing: spaceHit?.kind))")
 
+        // 9. Verify Sacred Keycap Core: light off-center tap >= 3.0pt inside a non-continuation key ('i' after 'trw')
+        //    is NEVER hijacked by adjacent valid key ('u'), while < 3.0pt bevel slip still snaps!
+        let interiorInsideI = CGPoint(x: iKey.frame.minX + 3.5, y: uKey.frame.midY)
+        let sacredHit = IOSKeyboardLayoutEngine.hitTest(point: interiorInsideI, in: snap, validNextMask: afterTrw.validNextMask)
+        assert(sacredHit?.kind == .letter(UInt8(ascii: "i")), "Expected sacred keycap core to preserve tap inside 'i', got \(String(describing: sacredHit?.kind))")
+
+        // 10. Verify portrait 219pt canvas gives >= 6.0pt live catch-margin below Spacebar inside XPC viewport,
+        //     and outer-margin corner tap beside 'z' never mutates to 'a' in Rust `push_touch_letter`!
+        let snap219 = layout.computeLayout(in: CGSize(width: 440, height: 219))
+        let space219 = snap219.keys.first(where: { $0.kind == .space })!
+        assert(219.0 - space219.frame.maxY >= 6.0, "Expected >= 6.0pt bottom catch margin below Spacebar, got \(219.0 - space219.frame.maxY)")
+        let bottomRimSpaceTap = CGPoint(x: space219.frame.midX, y: 218.5)
+        let bottomSpaceHit = IOSKeyboardLayoutEngine.hitTest(point: bottomRimSpaceTap, in: snap219, validNextMask: kState.validNextMask)
+        assert(bottomSpaceHit?.kind == .space, "Expected bottom-rim tap at y=218.5 to hit Spacebar")
+
+        bridge.clearComposition()
+        bridge.setKeyLayout(
+            centers52: snap219.centers52,
+            originX: snap219.originX,
+            originY: snap219.originY,
+            pitchX: snap219.pitchX,
+            pitchY: snap219.pitchY
+        )
+        let z219 = snap219.keys.first(where: { $0.kind == .letter(UInt8(ascii: "z")) })!
+        let zCorner = CGPoint(x: z219.frame.minX - 9.0, y: z219.frame.minY + 3.0)
+        let zHit = IOSKeyboardLayoutEngine.hitTest(point: zCorner, in: snap219)
+        assert(zHit?.kind == .letter(UInt8(ascii: "z")), "Expected gutter tap beside 'z' to hit 'z'")
+        let zOut = bridge.pushTouch(reportedAscii: UInt8(ascii: "z"), x: Float(zCorner.x), y: Float(zCorner.y), isNormalized: false, timestampMs: 4000)
+        assert(zOut.preedit == "z", "Expected Rust view-space touch to preserve UI hit-tested 'z', got '\(zOut.preedit)'")
+
         print("✓ All iOS 26 native grid, lowercase/shift, trackpad, ergonomic Y-bias & dynamic next-key tests passed!")
     }
 }

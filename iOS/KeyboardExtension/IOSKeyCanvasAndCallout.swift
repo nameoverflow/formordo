@@ -364,6 +364,11 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         let beganTimestamp: TimeInterval
         let initialPoint: CGPoint
         var currentPoint: CGPoint
+        var prevPoint: CGPoint
+        var prevTimestamp: TimeInterval
+        var maxMovedDistance: CGFloat = 0
+        var maxAbsDeltaY: CGFloat = 0
+        var latestStepSpeed: CGFloat = 0
         let initialKey: IOSKeySpec
         var currentKey: IOSKeySpec
         let isPlaneSlide: Bool
@@ -409,10 +414,15 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         fatalError("init(coder:) has not been implemented")
     }
 
-    /// Capture slightly high Row-0 (`q..p`) strikes passed through from the bottom `6pt` of `IOSCandidateRibbonView`
-    /// as well as slightly low Row-3 (`Space`/`123`/`Return`) strikes near the bottom dock edge.
+    /// Capture high Row-0 (`q..p`) strikes passed through from unoccupied `IOSCandidateRibbonView` regions
+    /// (`y = -24..0`) as well as low Row-3 (`Space`/`123`/`Return`) strikes at the bottom dock edge.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        bounds.insetBy(dx: 0, dy: -8.0).contains(point)
+        CGRect(
+            x: bounds.minX - 8.0,
+            y: bounds.minY - 24.0,
+            width: bounds.width + 16.0,
+            height: bounds.height + 34.0
+        ).contains(point)
     }
 
     override func willMove(toWindow newWindow: UIWindow?) {
@@ -468,11 +478,19 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         syncKeycapPressStates()
     }
 
-    private func purgeEndedOrOrphanTouches() {
+    private func purgeEndedOrOrphanTouches(referenceTimestamp: TimeInterval? = nil) {
         let stale = trackedTouches.compactMap { id, state -> ObjectIdentifier? in
             guard let t = state.touch else { return id }
             if state.committedByRollover && (t.phase == .ended || t.phase == .cancelled) {
                 return id
+            }
+            if !state.committedByRollover {
+                if t.phase == .cancelled {
+                    return id
+                }
+                if t.phase == .ended, let ref = referenceTimestamp, ref - state.beganTimestamp > 0.30 {
+                    return id
+                }
             }
             return nil
         }
@@ -540,14 +558,19 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        purgeEndedOrOrphanTouches()
+        let newestTs = touches.map(\.timestamp).max()
+        purgeEndedOrOrphanTouches(referenceTimestamp: newestTs)
         let ordered = touches.sorted(by: { $0.timestamp < $1.timestamp })
         for touch in ordered {
+            let newTouchId = ObjectIdentifier(touch)
             // 1. Unified Multi-Touch Rollover: commit every earlier uncommitted touch in exact press order
             //    BEFORE hit-testing the new touch (so `validNextMask`, `plane`, and `shiftState` are fresh!).
             let pendingIds = trackedTouches
                 .filter {
                     let state = $0.value
+                    if $0.key == newTouchId && abs(state.beganTimestamp - touch.timestamp) < 0.0005 {
+                        return false
+                    }
                     return !state.committedByRollover && !state.isPlaneSlide
                         && !(state.startedOnSpace && trackpad.isActive)
                 }
@@ -584,7 +607,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 continue
             }
 
-            let id = ObjectIdentifier(touch)
+            let id = newTouchId
             let isPlane: Bool
             if case .planeSwitch = hit.kind { isPlane = true } else { isPlane = false }
             let isSpace = (hit.kind == .space)
@@ -594,6 +617,8 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 beganTimestamp: touch.timestamp,
                 initialPoint: point,
                 currentPoint: point,
+                prevPoint: point,
+                prevTimestamp: touch.timestamp,
                 initialKey: hit,
                 currentKey: hit,
                 isPlaneSlide: isPlane,
@@ -631,9 +656,25 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
         for touch in touches {
             let id = ObjectIdentifier(touch)
             guard var state = trackedTouches[id], !state.committedByRollover else { continue }
-            if state.initialKey.kind == .backspace { continue }
             let pt = touch.location(in: self)
+            let stepDt = touch.timestamp - state.prevTimestamp
+            if state.prevTimestamp > state.beganTimestamp && stepDt > 0.001 {
+                let stepDist = hypot(pt.x - state.prevPoint.x, pt.y - state.prevPoint.y)
+                state.latestStepSpeed = stepDist / CGFloat(stepDt)
+            }
+            state.prevPoint = pt
+            state.prevTimestamp = touch.timestamp
             state.currentPoint = pt
+            state.maxMovedDistance = max(
+                state.maxMovedDistance,
+                hypot(pt.x - state.initialPoint.x, pt.y - state.initialPoint.y)
+            )
+            state.maxAbsDeltaY = max(state.maxAbsDeltaY, abs(pt.y - state.initialPoint.y))
+
+            if state.initialKey.kind == .backspace {
+                trackedTouches[id] = state
+                continue
+            }
 
             // 1. Hold-and-slide from `123` / `#+=` to pick a number/punctuation and auto-return
             if state.isPlaneSlide {
@@ -673,17 +714,34 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 continue
             }
 
-            // 3. Sticky Press-Lock Hysteresis: ignore natural thumb lift-roll within expanded keep-zone!
-            let keepRect = state.currentKey.frame.insetBy(dx: -10.0, dy: -13.0)
-            if keepRect.contains(pt) {
+            // 3. Functional keys (`Shift`, `中/英`, `Globe`, `Return`) stay locked to their own keycap
+            //    so lift-off thumb roll never converts them into adjacent letters or vice versa.
+            switch state.initialKey.kind {
+            case .letter, .symbol:
+                break
+            default:
                 trackedTouches[id] = state
                 continue
             }
 
-            // Never switch keys on rapid ballistic taps (< 95ms), regardless of how far the thumb
-            // flicks during lift-off toward the next key; only deliberate hold-and-slide switches keys!
+            // 4. Sticky Press-Lock Hysteresis: ignore natural thumb lift-roll within expanded keep-zone
+            //    around BOTH the keycap frame and `initialPoint` (protecting border/gutter strikes!).
+            let keepRect = state.currentKey.frame.insetBy(dx: -10.5, dy: -13.5)
+            let nearInitial = (state.currentKey.id == state.initialKey.id)
+                && hypot(pt.x - state.initialPoint.x, pt.y - state.initialPoint.y) <= 13.0
+            if keepRect.contains(pt) || nearInitial {
+                trackedTouches[id] = state
+                continue
+            }
+
+            // Never switch keys on rapid ballistic taps (< 115ms) or fast 120Hz lift-off flicks (> 380 pt/s)
+            // toward the next key; only deliberate hold-and-slide onto another character key switches keys!
             let dt = max(0, touch.timestamp - state.beganTimestamp)
-            guard dt >= 0.095 else {
+            guard dt >= 0.115 else {
+                trackedTouches[id] = state
+                continue
+            }
+            if dt < 0.20 && state.latestStepSpeed > 380.0 {
                 trackedTouches[id] = state
                 continue
             }
@@ -700,10 +758,21 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
 
             if let hit = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap, validNextMask: validNextMask),
                hit.id != state.currentKey.id {
-                state.currentKey = hit
-                trackedTouches[id] = state
-                syncKeycapPressStates()
-                onKeySlidePreview?(hit)
+                // Character touches may slide only onto character keys — never onto `⌫` (which would silently
+                // drop the key in `onKeyTouchUp`), `⇧`, `Space`, `123`, `中/英`, or `Return`!
+                let isCharacterTarget: Bool
+                switch hit.kind {
+                case .letter, .symbol: isCharacterTarget = true
+                default: isCharacterTarget = false
+                }
+                if isCharacterTarget {
+                    state.currentKey = hit
+                    trackedTouches[id] = state
+                    syncKeycapPressStates()
+                    onKeySlidePreview?(hit)
+                } else {
+                    trackedTouches[id] = state
+                }
             } else {
                 trackedTouches[id] = state
             }
@@ -804,14 +873,31 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 continue
             }
 
-            // Distinguish stationary/slight-roll edge-gated taps (e.g. iOS screen-edge or bottom-dock
-            // gesture gates near Spacebar) from real scroll/dismiss swipes:
-            let pt = touch.location(in: self)
-            let drift = hypot(pt.x - state.initialPoint.x, pt.y - state.initialPoint.y)
+            // Distinguish edge/bottom gesture-gate cancellations (e.g. screen-edge back-swipe gate on `q`/`p`
+            // or Home-indicator gate during a fast horizontal thumb sweep across Spacebar) from true vertical
+            // scroll/dismiss drags (`maxMovedDistance` tracked from actual `touchesMoved` events, insulated
+            // against synthetic XPC cancel coordinates jumping to window origin):
+            let rawEndPt = touch.location(in: self)
+            let effectiveDrift: CGFloat
+            let effectiveAbsDy: CGFloat
+            if bounds.insetBy(dx: -48.0, dy: -64.0).contains(rawEndPt) {
+                effectiveDrift = max(
+                    state.maxMovedDistance,
+                    hypot(rawEndPt.x - state.initialPoint.x, rawEndPt.y - state.initialPoint.y)
+                )
+                effectiveAbsDy = max(state.maxAbsDeltaY, abs(rawEndPt.y - state.initialPoint.y))
+            } else {
+                effectiveDrift = state.maxMovedDistance
+                effectiveAbsDy = state.maxAbsDeltaY
+            }
             let dt = max(0, touch.timestamp - state.beganTimestamp)
-            let maxDrift: CGFloat = state.startedOnSpace ? 32.0 : 26.0
-            let maxDt: TimeInterval = state.startedOnSpace ? 0.40 : 0.35
-            if !isHidden && drift <= maxDrift && dt <= maxDt && pt.y >= -44.0 {
+            let shouldRescue: Bool
+            if state.startedOnSpace {
+                shouldRescue = !isHidden && effectiveAbsDy <= 20.0 && effectiveDrift <= 52.0 && dt <= 0.42
+            } else {
+                shouldRescue = !isHidden && effectiveDrift <= 20.0 && dt <= 0.38
+            }
+            if shouldRescue {
                 rescuedAny = true
                 onKeyTouchUp?(state.initialKey, state.initialPoint)
             }

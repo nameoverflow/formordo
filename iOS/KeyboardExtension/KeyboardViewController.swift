@@ -38,11 +38,20 @@ public final class KeyboardViewController: UIInputViewController {
         syncEngineToUI()
     }
 
+    public override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge {
+        .all
+    }
+
     public override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         feedback.prepare()
         bridge.loadConfigAndUser()
         syncEngineToUI()
+    }
+
+    public override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        disableTouchDelayOnContainerGestures()
     }
 
     public override func viewWillDisappear(_ animated: Bool) {
@@ -95,13 +104,13 @@ public final class KeyboardViewController: UIInputViewController {
         calloutView.isHidden = true
 
         inputView.addSubview(glassBackdrop)
-        inputView.addSubview(ribbonView)
         inputView.addSubview(keyCanvas)
+        inputView.addSubview(ribbonView)
         inputView.addSubview(expandedGrid)
         inputView.addSubview(calloutView)
 
         let hc = inputView.heightAnchor.constraint(equalToConstant: 263)
-        hc.priority = .defaultHigh
+        hc.priority = UILayoutPriority(999)
         self.heightConstraint = hc
 
         NSLayoutConstraint.activate([
@@ -573,6 +582,20 @@ public final class KeyboardViewController: UIInputViewController {
             pitchX: snap.pitchX,
             pitchY: snap.pitchY
         )
+    }
+
+    /// Ensure no ancestor container gesture recognizer inside our extension window holds `delaysTouchesBegan`,
+    /// so brief light grazing taps (`10-25ms`) reach `keyCanvas.touchesBegan` immediately without lag or drop.
+    private func disableTouchDelayOnContainerGestures() {
+        var cur: UIView? = inputView ?? view
+        while let v = cur {
+            if let recognizers = v.gestureRecognizers {
+                for gr in recognizers where gr.delaysTouchesBegan {
+                    gr.delaysTouchesBegan = false
+                }
+            }
+            cur = v.superview
+        }
     }
 
     private var isDarkAppearance: Bool {
