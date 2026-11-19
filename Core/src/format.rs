@@ -6,6 +6,7 @@ use std::path::Path;
 pub const WBDICT_MAGIC: &[u8; 8] = b"WBDICT01";
 pub const WBAUX_MAGIC: &[u8; 8] = b"WBAUX001";
 pub const WBAUX_MAGIC_V2: &[u8; 8] = b"WBAUX002";
+pub const WBAUX_MAGIC_V3: &[u8; 8] = b"WBAUX003";
 
 pub const ENTRY_FLAG_SINGLE_CHAR: u16 = 1 << 0;
 pub const ENTRY_FLAG_EXT_RARE: u16 = 1 << 1;
@@ -427,6 +428,70 @@ impl DictView {
         mask
     }
 
+    /// Return the highest-weight non-rare entry for each next letter `'a'..='y'` (`0..25`)
+    /// continuing `prefix_bytes` (`1 <= len <= 3`). Used for sub-microsecond neural gutter priors.
+    pub fn best_continuation_per_letter(
+        &self,
+        prefix_bytes: &[u8],
+        include_rare: bool,
+    ) -> [Option<DictEntryRef<'_>>; 25] {
+        let mut out: [Option<DictEntryRef<'_>>; 25] = [None; 25];
+        if prefix_bytes.is_empty() || prefix_bytes.len() >= 4 {
+            return out;
+        }
+        let mut buf = [0u8; 4];
+        let n = prefix_bytes.len();
+        buf[..n].copy_from_slice(prefix_bytes);
+
+        for idx in 0..25u8 {
+            buf[n] = b'a' + idx;
+            let Some(ext) = PackedCode::from_bytes(&buf[..=n]) else {
+                continue;
+            };
+            let (lo, hi) = ext.prefix_range();
+            let mut b_idx = self.lower_bound_bucket(lo);
+            let mut best_e: Option<DictEntryRef<'_>> = None;
+            let mut scanned_buckets = 0usize;
+            while b_idx < self.bucket_count && scanned_buckets < 24 {
+                let (c, start, count) = self.bucket_at(b_idx);
+                if c > hi {
+                    break;
+                }
+                scanned_buckets += 1;
+                for i in start..(start + count).min(start + 2) {
+                    if let Some(e) = self.entry_at(i, c) {
+                        if !include_rare && e.is_ext_rare() {
+                            continue;
+                        }
+                        let replace = match best_e {
+                            None => true,
+                            Some(prev) => {
+                                // Prefer exact match at `ext` if shortcode primary, else highest weight
+                                if c == ext && prev.code != ext {
+                                    true
+                                } else if c != ext && prev.code == ext {
+                                    false
+                                } else {
+                                    e.weight > prev.weight
+                                }
+                            }
+                        };
+                        if replace {
+                            best_e = Some(e);
+                        }
+                        break;
+                    }
+                }
+                if best_e.map(|x| x.code == ext).unwrap_or(false) && n == 3 {
+                    break;
+                }
+                b_idx += 1;
+            }
+            out[idx as usize] = best_e;
+        }
+        out
+    }
+
     /// Prefix completion lookup for codes strictly longer than `prefix`.
     pub fn lookup_longer_prefix(
         &self,
@@ -563,6 +628,8 @@ pub struct AuxBuildInput {
     pub unigrams: Vec<(u32, u16)>,
     /// Packed BMP trigrams from `pack_trigram(c0, c1, c2, residual_boost_q8)`
     pub trigrams: Vec<u64>,
+    /// Optional embedded `WBLM0001` (`Micro-RWKV-7` INT8 weights) zero-copy section (`WBAUX003`).
+    pub neural_blob: Vec<u8>,
 }
 
 pub fn serialize_wbaux(mut input: AuxBuildInput) -> Vec<u8> {
@@ -652,9 +719,23 @@ pub fn serialize_wbaux(mut input: AuxBuildInput) -> Vec<u8> {
     let pool_off = bg_off + bg_buf.len() as u32;
     let unigram_off = pool_off + py_pool.len() as u32;
     let trigram_off = unigram_off + uni_buf.len() as u32;
+    let after_tri = trigram_off as usize + tri_buf.len();
 
-    let mut out = Vec::<u8>::with_capacity(trigram_off as usize + tri_buf.len());
-    out.extend_from_slice(WBAUX_MAGIC_V2);
+    let has_neural = !input.neural_blob.is_empty();
+    let neural_off = if has_neural {
+        ((after_tri + 63) & !63) as u32 // 64-byte cache-line align neural section
+    } else {
+        0u32
+    };
+    let neural_len = input.neural_blob.len() as u32;
+    let total_cap = if has_neural {
+        neural_off as usize + input.neural_blob.len()
+    } else {
+        after_tri
+    };
+
+    let mut out = Vec::<u8>::with_capacity(total_cap);
+    out.extend_from_slice(if has_neural { WBAUX_MAGIC_V3 } else { WBAUX_MAGIC_V2 });
     out.extend_from_slice(&py_bucket_count.to_le_bytes());
     out.extend_from_slice(&(input.pinyin_items.len() as u32).to_le_bytes());
     out.extend_from_slice(&(input.bigrams.len() as u32).to_le_bytes());
@@ -667,6 +748,8 @@ pub fn serialize_wbaux(mut input: AuxBuildInput) -> Vec<u8> {
     out.extend_from_slice(&unigram_off.to_le_bytes());
     out.extend_from_slice(&(input.trigrams.len() as u32).to_le_bytes());
     out.extend_from_slice(&trigram_off.to_le_bytes());
+    out.extend_from_slice(&neural_off.to_le_bytes());
+    out.extend_from_slice(&neural_len.to_le_bytes());
     while out.len() < AUX_HEADER_LEN_V2 {
         out.push(0);
     }
@@ -676,6 +759,12 @@ pub fn serialize_wbaux(mut input: AuxBuildInput) -> Vec<u8> {
     out.extend_from_slice(&py_pool);
     out.extend_from_slice(&uni_buf);
     out.extend_from_slice(&tri_buf);
+    if has_neural {
+        while out.len() < neural_off as usize {
+            out.push(0);
+        }
+        out.extend_from_slice(&input.neural_blob);
+    }
     out
 }
 
@@ -693,6 +782,9 @@ pub struct AuxView {
     pool_len: usize,
     unigram_off: usize,
     trigram_off: usize,
+    neural_off: usize,
+    neural_len: usize,
+    neural_offs: Option<crate::neural::NeuralOffsets>,
 }
 
 impl AuxView {
@@ -712,7 +804,8 @@ impl AuxView {
                 "invalid WBAUX header",
             ));
         }
-        let is_v2 = &b[0..8] == WBAUX_MAGIC_V2;
+        let is_v3 = &b[0..8] == WBAUX_MAGIC_V3;
+        let is_v2 = is_v3 || &b[0..8] == WBAUX_MAGIC_V2;
         if !is_v2 && &b[0..8] != WBAUX_MAGIC {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -722,7 +815,7 @@ impl AuxView {
         if is_v2 && b.len() < AUX_HEADER_LEN_V2 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "truncated WBAUX002 header",
+                "truncated WBAUX002/003 header",
             ));
         }
         let py_bucket_count = read_u32(b, 8) as usize;
@@ -745,18 +838,33 @@ impl AuxView {
             (0, 0, 0, 0)
         };
 
+        let (neural_off, neural_len) = if is_v3 {
+            (read_u32(b, 56) as usize, read_u32(b, 60) as usize)
+        } else {
+            (0, 0)
+        };
+
         if py_buckets_off + py_bucket_count * PY_BUCKET_STRIDE > b.len()
             || py_items_off + py_item_count * PY_ITEM_STRIDE > b.len()
             || bg_off + bigram_count * BIGRAM_STRIDE > b.len()
             || pool_off + pool_len > b.len()
             || unigram_off + unigram_count * UNIGRAM_STRIDE > b.len()
             || trigram_off + trigram_count * TRIGRAM_STRIDE > b.len()
+            || neural_off + neural_len > b.len()
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "truncated WBAUX section",
             ));
         }
+
+        let neural_offs = if neural_len > 0 {
+            Some(crate::neural::NeuralOffsets::parse(
+                &b[neural_off..neural_off + neural_len],
+            )?)
+        } else {
+            None
+        };
 
         Ok(Self {
             buf,
@@ -772,6 +880,24 @@ impl AuxView {
             pool_len,
             unigram_off,
             trigram_off,
+            neural_off,
+            neural_len,
+            neural_offs,
+        })
+    }
+
+    #[inline]
+    pub fn has_neural(&self) -> bool {
+        self.neural_offs.is_some()
+    }
+
+    #[inline]
+    pub fn neural_view(&self) -> Option<crate::neural::NeuralView<'_>> {
+        let offs = self.neural_offs.as_ref()?;
+        let b = self.buf.as_slice();
+        Some(crate::neural::NeuralView {
+            blob: &b[self.neural_off..self.neural_off + self.neural_len],
+            offs,
         })
     }
 

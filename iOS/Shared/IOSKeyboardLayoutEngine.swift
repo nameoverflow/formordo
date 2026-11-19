@@ -113,6 +113,8 @@ public struct IOSKeyboardLayoutEngine: Equatable {
     public var isTrackpadActive: Bool = false
     /// 26-bit mask of valid next Wubi letters (`0x03FF_FFFF` when unconstrained).
     public var validNextMask: UInt32 = 0x03FF_FFFF
+    /// 26-element continuous neural prior weights (`0` = dead, `100` = neutral, `50..180` = RWKV weighted).
+    public var nextKeyPriors: [UInt8] = Array(repeating: 100, count: 26)
 
     private var lastShiftTapTime: TimeInterval = 0
 
@@ -457,7 +459,8 @@ public struct IOSKeyboardLayoutEngine: Equatable {
     public static func hitTest(
         point: CGPoint,
         in snapshot: LayoutSnapshot,
-        validNextMask: UInt32 = 0x03FF_FFFF
+        validNextMask: UInt32 = 0x03FF_FFFF,
+        nextKeyPriors: [UInt8] = []
     ) -> IOSKeySpec? {
         guard snapshot.bounds.insetBy(dx: -18, dy: -28).contains(point) else {
             return nil
@@ -484,7 +487,9 @@ public struct IOSKeyboardLayoutEngine: Equatable {
             qPt.y -= ergonomicThumbYBias
         }
 
-        let hasDynamicWeights = (validNextMask != 0x03FF_FFFF) && (validNextMask != 0)
+        let hasMaskWeights = (validNextMask != 0x03FF_FFFF) && (validNextMask != 0)
+        let hasNeuralPriors = (nextKeyPriors.count == 26) && nextKeyPriors.contains(where: { $0 != 100 })
+        let hasDynamicWeights = hasMaskWeights || hasNeuralPriors
 
         if !hasDynamicWeights {
             if let direct = snapshot.keys.first(where: { $0.frame.contains(qPt) }) {
@@ -550,16 +555,32 @@ public struct IOSKeyboardLayoutEngine: Equatable {
             case .shift, .backspace:
                 evalPt = point
             case .letter(let ascii) where hasDynamicWeights && ascii >= 97 && ascii <= 122:
-                let bit = UInt32(1) << UInt32(ascii - 97)
-                if (validNextMask & bit) != 0 {
-                    // Dynamically expand valid Wubi continuation keys into letter gutters without encroaching on Spacebar
-                    effRect = effRect.insetBy(dx: -4.8, dy: -3.2)
+                let idx = Int(ascii - 97)
+                let bit = UInt32(1) << UInt32(idx)
+                let pVal = (nextKeyPriors.count == 26) ? Int(nextKeyPriors[idx]) : ((validNextMask & bit) != 0 ? 100 : 0)
+                if (hasMaskWeights && (validNextMask & bit) == 0) || pVal == 0 {
+                    effRect = effRect.insetBy(dx: 2.8, dy: 2.2)
+                    deadKeyPenalty = 4.2
+                } else {
+                    // Modulate gutter/bevel reach continuously by `Micro-RWKV-7` next-key log-prior (`pVal = 54..176`, `100` = neutral)
+                    let bias = CGFloat(pVal - 100) / 25.0
+                    let expX: CGFloat
+                    let expY: CGFloat
+                    if !hasMaskWeights {
+                        // Key #1 predictive gutter mode (`validNextMask == ALL_26`)
+                        expX = max(-1.6, min(3.8, bias * 1.45))
+                        expY = max(-1.0, min(2.4, bias * 0.95))
+                        deadKeyPenalty = -bias * 0.85
+                    } else {
+                        // Keys #2..#4 valid continuation mode (breaks valid-vs-valid gutter ties!)
+                        expX = max(1.2, min(6.2, 4.8 + bias * 1.15))
+                        expY = max(0.8, min(4.0, 3.2 + bias * 0.75))
+                        deadKeyPenalty = -bias * 1.15
+                    }
+                    effRect = effRect.insetBy(dx: -expX, dy: -expY)
                     if effRect.maxY > maxLetterBottomY {
                         effRect.size.height = max(k.frame.height, maxLetterBottomY - effRect.minY)
                     }
-                } else {
-                    effRect = effRect.insetBy(dx: 2.8, dy: 2.2)
-                    deadKeyPenalty = 4.2
                 }
             default:
                 break

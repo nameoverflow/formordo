@@ -230,7 +230,7 @@ fn load_tghz_set(pinyin_dir: &PathBuf) -> HashSet<u32> {
     set
 }
 
-fn load_corpus_lm(dir: &Path) -> (Vec<(u32, u16)>, Vec<(u64, u16)>, Vec<u64>) {
+fn load_corpus_lm(dir: &Path) -> (Vec<(u32, u16)>, Vec<(u64, u16)>, Vec<u64>, Vec<u8>) {
     let mut unigrams = Vec::new();
     let uni_path = dir.join("unigrams.tsv");
     if let Ok(content) = fs::read_to_string(&uni_path) {
@@ -306,7 +306,10 @@ fn load_corpus_lm(dir: &Path) -> (Vec<(u32, u16)>, Vec<(u64, u16)>, Vec<u64>) {
         }
     }
 
-    (unigrams, bigrams, trigrams)
+    let neural_path = dir.join("neural_rwkv7.wblm");
+    let neural_blob = fs::read(&neural_path).unwrap_or_default();
+
+    (unigrams, bigrams, trigrams, neural_blob)
 }
 
 fn build_aux_data(
@@ -370,19 +373,21 @@ fn build_aux_data(
     }
 
     if let Some(lm_dir) = corpus_lm_dir {
-        let (unigrams, bigrams, trigrams) = load_corpus_lm(lm_dir);
+        let (unigrams, bigrams, trigrams, neural_blob) = load_corpus_lm(lm_dir);
         println!(
-            "Loaded corpus LM from {}: {} unigrams, {} bigrams, {} trigrams",
+            "Loaded corpus LM from {}: {} unigrams, {} bigrams, {} trigrams, neural={:.2} MB",
             lm_dir.display(),
             unigrams.len(),
             bigrams.len(),
-            trigrams.len()
+            trigrams.len(),
+            neural_blob.len() as f64 / (1024.0 * 1024.0)
         );
         return AuxBuildInput {
             pinyin_items: py_items,
             bigrams,
             unigrams,
             trigrams,
+            neural_blob,
         };
     }
 
@@ -479,6 +484,7 @@ fn build_aux_data(
         bigrams,
         unigrams: Vec::new(),
         trigrams: Vec::new(),
+        neural_blob: Vec::new(),
     }
 }
 

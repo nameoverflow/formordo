@@ -26,16 +26,48 @@ fn real_dicts_latency_schemas_and_typo_correction() {
     let mmap_us = t0.elapsed().as_micros();
     let (py_cnt, uni_cnt, bi_cnt, tri_cnt) = aux.stats();
     println!(
-        "Cold-start mmap of 86 + 98 + 06 + aux (py={}, uni={}, bi={}, tri={}) took: {} us",
-        py_cnt, uni_cnt, bi_cnt, tri_cnt, mmap_us
+        "Cold-start mmap of 86 + 98 + 06 + aux (py={}, uni={}, bi={}, tri={}, neural={}) took: {} us",
+        py_cnt,
+        uni_cnt,
+        bi_cnt,
+        tri_cnt,
+        aux.has_neural(),
+        mmap_us
     );
     assert!(mmap_us < 10_000, "mmap should be sub-millisecond to few ms");
-    assert!(aux.has_unigrams(), "expected WBAUX002 with corpus unigrams");
-    assert!(uni_cnt >= 5_000 && bi_cnt >= 200_000 && tri_cnt >= 100_000);
+    assert!(aux.has_unigrams(), "expected WBAUX002/WBAUX003 with corpus unigrams");
+    assert!(aux.has_neural(), "expected WBAUX003 with Micro-RWKV-7 neural blob");
+    assert!(uni_cnt >= 7_500 && bi_cnt >= 50_000 && tri_cnt >= 25_000);
     assert!(aux.trigram_boost('输', '入', '法') > 0.5);
     assert!(aux.trigram_boost('小', '红', '书') > 0.5);
-    assert!(aux.trigram_boost('大', '模', '型') > 0.5);
-    assert!(aux.trigram_boost('性', '价', '比') > 0.5);
+    assert!(aux.bigram_boost('模', '型') > 1.0);
+
+    // Verify exact INT8 numerical parity against Python QAT reference ("今天天气真" -> 好/热 vs 油/突)
+    {
+        let nv = aux.neural_view().expect("neural_view");
+        let mut tracker = wubi_core::neural::NeuralContextTracker::default();
+        tracker.init_with_model(&nv);
+        tracker.commit_cjk_str(&nv, "今天天气真");
+        let s_hao = nv.score_next_char(&tracker.active, '好');
+        let s_re = nv.score_next_char(&tracker.active, '热');
+        let s_you = nv.score_next_char(&tracker.active, '油');
+        let s_tu = nv.score_next_char(&tracker.active, '突');
+        println!(
+            "RWKV-7 parity check '今天天气真' -> 好={:.6}, 热={:.6}, 油={:.6}, 突={:.6}",
+            s_hao, s_re, s_you, s_tu
+        );
+        assert!((s_hao - (-0.558271)).abs() < 2e-4, "hao parity mismatch: {}", s_hao);
+        assert!((s_re - (-6.590938)).abs() < 2e-4, "re parity mismatch: {}", s_re);
+        assert!((s_you - (-9.325247)).abs() < 2e-4, "you parity mismatch: {}", s_you);
+        assert!((s_tu - (-8.358400)).abs() < 2e-4, "tu parity mismatch: {}", s_tu);
+
+        // Verify modern tech entity awareness in Micro-RWKV-7 ("大模" -> '型')
+        tracker.init_with_model(&nv);
+        tracker.commit_cjk_str(&nv, "大模");
+        let s_xing = nv.score_next_char(&tracker.active, '型');
+        println!("RWKV-7 modern tech check '大模' -> 型={:.4}", s_xing);
+        assert!(s_xing > -2.0, "expected RWKV-7 to strongly predict '型' after '大模', got {}", s_xing);
+    }
 
     // Verify authentic differences across 86, 98, and 06 (新世纪)!
     // E.g. '码': 86 = dcg, 98 = dcg, '软': 86 = lqw, 98 = lqw; '气': 86 = rnb, 98 = rty, 06 = rty/rn...

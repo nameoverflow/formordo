@@ -214,7 +214,8 @@ fn run_eval_with_engine(
             segment_sentence(d, sent)
         };
         let m = per_dom.entry(dom.clone()).or_default();
-        let mut prefix_ctx = String::new();
+        engine.clear_composition();
+        engine.clear_context();
 
         for (target_text, target_code) in tokens {
             let code_bytes = target_code.as_bytes();
@@ -249,7 +250,6 @@ fn run_eval_with_engine(
                     let alpha = 0.53 + rng.next_f32() * 0.08; // 0.53..0.61 past midpoint onto neighbor
                     let jitter_y = (rng.next_f32() - 0.5) * 0.12;
                     engine.clear_composition();
-                    engine.set_recent_context(&prefix_ctx);
                     for j in 0..code_len {
                         let orig = code_bytes[j];
                         let (cx, cy) = layout.center_of(orig);
@@ -280,7 +280,6 @@ fn run_eval_with_engine(
                     let alpha = 0.54 + rng.next_f32() * 0.16; // 0.54..0.70 onto neighbor
                     let jitter_y = (rng.next_f32() - 0.5) * 0.12;
                     engine.clear_composition();
-                    engine.set_recent_context(&prefix_ctx);
                     for j in 0..code_len {
                         let orig = code_bytes[j];
                         let (cx, cy) = layout.center_of(orig);
@@ -306,7 +305,6 @@ fn run_eval_with_engine(
 
                     // 3a) Physical keyboard empty-code neighbor typo
                     engine.clear_composition();
-                    engine.set_recent_context(&prefix_ctx);
                     for j in 0..code_len {
                         let ch = if j == pos { nb } else { code_bytes[j] };
                         let _ = engine.handle_key_event(0, Some(ch as char), false, 1000 + j as u64 * 70);
@@ -327,7 +325,6 @@ fn run_eval_with_engine(
                     let (pos, nb) = coll_muts[rng.range(coll_muts.len())];
                     let alpha = 0.36 + rng.next_f32() * 0.10; // 0.36..0.46 (near border, still on intended key!)
                     engine.clear_composition();
-                    engine.set_recent_context(&prefix_ctx);
                     for j in 0..code_len {
                         let orig = code_bytes[j];
                         let (cx, cy) = layout.center_of(orig);
@@ -348,7 +345,8 @@ fn run_eval_with_engine(
                 }
             }
 
-            prefix_ctx.push_str(&target_text);
+            engine.clear_composition();
+            engine.append_recent_context(&target_text);
         }
     }
 
@@ -357,6 +355,139 @@ fn run_eval_with_engine(
         total.add(m);
     }
     (total, per_dom)
+}
+
+fn ios_gutter_score(dist_from_center_pt: f32, p_val: u8, has_mask_weights: bool) -> f32 {
+    // Exact 1:1 mirror of `IOSKeyboardLayoutEngine.hitTest` horizontal gutter scoring
+    // (`pitchX = 39.0pt`, `keyW = 33.0pt` -> `halfW = 16.5pt`, `gapX = 6.0pt`):
+    let half_w = 16.5f32;
+    let bias = ((p_val as f32) - 100.0) / 25.0;
+    let (exp_x, dead_pen) = if !has_mask_weights {
+        (
+            (bias * 1.45).clamp(-1.6, 3.8),
+            -bias * 0.85,
+        )
+    } else {
+        (
+            (4.8 + bias * 1.15).clamp(1.2, 6.2),
+            -bias * 1.15,
+        )
+    };
+    let eff_half_w = half_w + exp_x;
+    let dx = (dist_from_center_pt - eff_half_w).max(0.0);
+    if dx == 0.0 {
+        let inner_depth = eff_half_w - dist_from_center_pt;
+        -inner_depth + dead_pen * 0.25
+    } else {
+        dx + dead_pen
+    }
+}
+
+fn eval_dynamic_hitbox(
+    engine: &mut WubiEngine,
+    sentences: &[(String, String)],
+    seed: u64,
+    max_per_domain: usize,
+) {
+    // Mirrors `IOSKeyboardLayoutEngine.hitTest` gutter disambiguation on disputed inter-key
+    // gutter taps (`alpha = 0.51..0.56`, i.e. `0.4..2.3pt` past midpoint into neighbor's half
+    // of the 6pt gutter, strictly outside the 3.0pt Sacred Keycap Core).
+    let layout = KeyLayout::default();
+    let mut rng = Rng::new(seed);
+    let mut dom_sent_cnt = BTreeMap::<String, usize>::new();
+
+    let mut k1_n = 0usize;
+    let mut k1_geom_win = 0usize;
+    let mut k1_prior_win = 0usize;
+
+    let mut k24_vv_n = 0usize;
+    let mut k24_geom_win = 0usize;
+    let mut k24_prior_win = 0usize;
+
+    for (dom, sent) in sentences {
+        let sc = dom_sent_cnt.entry(dom.clone()).or_insert(0);
+        if *sc >= max_per_domain {
+            continue;
+        }
+        *sc += 1;
+
+        let tokens = {
+            let d = engine.active_dict().unwrap();
+            segment_sentence(d, sent)
+        };
+        engine.clear_composition();
+        engine.clear_context();
+
+        for (target_text, target_code) in tokens {
+            let cb = target_code.as_bytes();
+            if cb.len() >= 2 && cb.len() <= 4 {
+                // Key #1 gutter slip (`pos = 0`): all 25 Wubi keys 'a'..'y' are valid at pos 0!
+                let k_orig = cb[0];
+                let nbs0 = neighbor_keys(&layout, k_orig);
+                if !nbs0.is_empty() {
+                    let nb = nbs0[rng.range(nbs0.len())];
+                    let alpha = 0.51 + rng.next_f32() * 0.05; // 0.51..0.56 in inter-key gutter
+                    engine.clear_composition();
+                    let priors = engine.next_key_priors();
+                    let p_orig = priors[(k_orig - b'a') as usize];
+                    let p_nb = priors[(nb - b'a') as usize];
+                    let d_orig = alpha * 39.0;
+                    let d_nb = (1.0 - alpha) * 39.0;
+                    k1_n += 1;
+                    if d_orig < d_nb {
+                        k1_geom_win += 1;
+                    }
+                    if ios_gutter_score(d_orig, p_orig, false) < ios_gutter_score(d_nb, p_nb, false) {
+                        k1_prior_win += 1;
+                    }
+                }
+
+                // Keys #2..#4 valid-vs-valid gutter slip (BOTH `orig` and `nb` are valid next keys!)
+                for pos in 1..cb.len() {
+                    engine.clear_composition();
+                    for j in 0..pos {
+                        let c = cb[j];
+                        let (cx, cy) = layout.center_of(c);
+                        let _ = engine.push_touch_letter(c, cx, cy, true, 1000 + j as u64 * 70);
+                    }
+                    let mask = engine.valid_next_mask();
+                    let priors = engine.next_key_priors();
+                    let k_orig = cb[pos];
+                    let valid_nbs: Vec<u8> = neighbor_keys(&layout, k_orig)
+                        .into_iter()
+                        .filter(|&nb| (mask & (1u32 << (nb - b'a'))) != 0)
+                        .collect();
+                    if !valid_nbs.is_empty() {
+                        let nb = valid_nbs[rng.range(valid_nbs.len())];
+                        let alpha = 0.51 + rng.next_f32() * 0.05;
+                        let p_orig = priors[(k_orig - b'a') as usize];
+                        let p_nb = priors[(nb - b'a') as usize];
+                        let d_orig = alpha * 39.0;
+                        let d_nb = (1.0 - alpha) * 39.0;
+                        k24_vv_n += 1;
+                        if d_orig < d_nb {
+                            k24_geom_win += 1;
+                        }
+                        if ios_gutter_score(d_orig, p_orig, true) < ios_gutter_score(d_nb, p_nb, true) {
+                            k24_prior_win += 1;
+                        }
+                    }
+                }
+            }
+            engine.clear_composition();
+            engine.append_recent_context(&target_text);
+        }
+    }
+
+    println!(
+        "Dynamic Hitbox Gutter Disambiguation -> Key#1({}): static_mask={:.2}% -> nextKeyPriors={:.2}% | Keys#2-4 Valid-vs-Valid({}): binary_validMask={:.2}% -> nextKeyPriors={:.2}%",
+        k1_n,
+        Metrics::pct(k1_geom_win, k1_n),
+        Metrics::pct(k1_prior_win, k1_n),
+        k24_vv_n,
+        Metrics::pct(k24_geom_win, k24_vv_n),
+        Metrics::pct(k24_prior_win, k24_vv_n),
+    );
 }
 
 fn load_sentences(path: &PathBuf) -> Vec<(String, String)> {
@@ -385,6 +516,8 @@ fn main() {
     let mut schema = WubiSchema::Wubi86;
     let mut max_per_domain = 250usize;
     let mut grid_search = false;
+    let mut eval_hitbox = false;
+    let mut custom_weights = false;
     let mut lm_w = LmWeights::default();
 
     let mut i = 1;
@@ -396,12 +529,14 @@ fn main() {
             "--schema" => { schema = WubiSchema::from_str_tag(&args[i + 1]); i += 2; }
             "--max-per-domain" => { max_per_domain = args[i + 1].parse().unwrap(); i += 2; }
             "--grid-search" => { grid_search = true; i += 1; }
-            "--uni" => { lm_w.corpus_unigram_scale = args[i + 1].parse().unwrap(); i += 2; }
-            "--dict-prior" => { lm_w.dict_prior_scale = args[i + 1].parse().unwrap(); i += 2; }
-            "--bg" => { lm_w.bigram_scale = args[i + 1].parse().unwrap(); i += 2; }
-            "--tg" => { lm_w.trigram_scale = args[i + 1].parse().unwrap(); i += 2; }
-            "--int-bg" => { lm_w.internal_bigram_scale = args[i + 1].parse().unwrap(); i += 2; }
-            "--spatial" => { lm_w.spatial_scale = args[i + 1].parse().unwrap(); i += 2; }
+            "--eval-hitbox" => { eval_hitbox = true; i += 1; }
+            "--uni" => { lm_w.corpus_unigram_scale = args[i + 1].parse().unwrap(); custom_weights = true; i += 2; }
+            "--dict-prior" => { lm_w.dict_prior_scale = args[i + 1].parse().unwrap(); custom_weights = true; i += 2; }
+            "--bg" => { lm_w.bigram_scale = args[i + 1].parse().unwrap(); custom_weights = true; i += 2; }
+            "--tg" => { lm_w.trigram_scale = args[i + 1].parse().unwrap(); custom_weights = true; i += 2; }
+            "--int-bg" => { lm_w.internal_bigram_scale = args[i + 1].parse().unwrap(); custom_weights = true; i += 2; }
+            "--spatial" => { lm_w.spatial_scale = args[i + 1].parse().unwrap(); custom_weights = true; i += 2; }
+            "--ns" => { lm_w.neural_scale = args[i + 1].parse().unwrap(); custom_weights = true; i += 2; }
             other => {
                 eprintln!("Unknown arg: {}", other);
                 std::process::exit(1);
@@ -420,14 +555,16 @@ fn main() {
     let dict = DictView::open_mmap(&dict_file).expect("open dict");
     let aux = AuxView::open_mmap(&aux_file).expect("open aux");
     let stats = aux.stats();
+    let has_neural = aux.has_neural();
     println!(
-        "Loaded schema={} aux={} (py={}, uni={}, bi={}, tri={})",
+        "Loaded schema={} aux={} (py={}, uni={}, bi={}, tri={}, neural={})",
         schema.as_tag(),
         aux_file.display(),
         stats.0,
         stats.1,
         stats.2,
-        stats.3
+        stats.3,
+        has_neural
     );
 
     let sentences = load_sentences(&eval_tsv);
@@ -441,43 +578,49 @@ fn main() {
     engine.load_dict(schema, dict);
     engine.set_aux(aux);
 
+    if eval_hitbox {
+        eval_dynamic_hitbox(&mut engine, &sentences, 20261119, max_per_domain);
+        return;
+    }
+
     if grid_search {
-        println!("Running validation grid search...");
+        println!("Running validation grid search (has_neural={})...", has_neural);
         let mut best_obj = f64::NEG_INFINITY;
-        let mut best_w = lm_w;
-        for &dp in &[0.22f32, 0.30, 0.38] {
-            for &cu in &[0.28f32, 0.40, 0.52] {
-                for &bg in &[0.85f32, 1.05, 1.25] {
-                    for &tg in &[0.75f32, 1.00, 1.25] {
-                        let w = LmWeights {
-                            spatial_scale: 2.05,
-                            dict_prior_scale: dp,
-                            corpus_unigram_scale: cu,
-                            internal_bigram_scale: 0.30,
-                            bigram_scale: bg,
-                            trigram_scale: tg,
-                            cross_trigram_scale: tg * 0.65,
-                            phrase_bonus: 0.65,
-                        };
-                        engine.lm_weights = w;
-                        let (tot, _) = run_eval_with_engine(&mut engine, &sentences, 20261119, max_per_domain);
-                        let obj = tot.objective();
-                        if obj > best_obj {
-                            best_obj = obj;
-                            best_w = w;
-                            println!(
-                                "NEW BEST obj={:6.2} (dp={:.2} cu={:.2} bg={:.2} tg={:.2}) -> TC1={:.2}% TC3={:.2}% TE1={:.2}% PE1={:.2}% FP={:.2}%",
-                                obj,
-                                dp,
-                                cu,
-                                bg,
-                                tg,
-                                Metrics::pct(tot.touch_coll_top1, tot.touch_coll_n),
-                                Metrics::pct(tot.touch_coll_top3, tot.touch_coll_n),
-                                Metrics::pct(tot.touch_empty_top1, tot.touch_empty_n),
-                                Metrics::pct(tot.phys_empty_top1, tot.phys_empty_n),
-                                Metrics::pct(tot.correct_border_fp, tot.correct_border_n),
-                            );
+        let mut best_w = engine.lm_weights;
+        if has_neural {
+            for &sp in &[2.85f32, 3.05, 3.25] {
+                for &dp in &[0.32f32] {
+                    for &bg in &[0.65f32] {
+                        for &ns in &[0.65f32, 0.80, 0.95] {
+                            let w = LmWeights {
+                                spatial_scale: sp,
+                                dict_prior_scale: dp,
+                                corpus_unigram_scale: 0.24,
+                                internal_bigram_scale: 0.28,
+                                bigram_scale: bg,
+                                trigram_scale: 0.65,
+                                cross_trigram_scale: 0.45,
+                                phrase_bonus: 0.65,
+                                neural_scale: ns,
+                            };
+                            engine.lm_weights = w;
+                            let (tot, _) = run_eval_with_engine(&mut engine, &sentences, 20261119, max_per_domain);
+                            let fp = Metrics::pct(tot.correct_border_fp, tot.correct_border_n);
+                            let obj = tot.objective();
+                            // Enforce strict false-positive guard (<= 0.62% on val!)
+                            if fp <= 0.62 && obj > best_obj {
+                                best_obj = obj;
+                                best_w = w;
+                                println!(
+                                    "NEW BEST obj={:6.2} (sp={:.2} dp={:.2} bg={:.2} ns={:.2}) -> TC1={:.2}% TC3={:.2}% TE1={:.2}% PE1={:.2}% FP={:.2}%",
+                                    obj, sp, dp, bg, ns,
+                                    Metrics::pct(tot.touch_coll_top1, tot.touch_coll_n),
+                                    Metrics::pct(tot.touch_coll_top3, tot.touch_coll_n),
+                                    Metrics::pct(tot.touch_empty_top1, tot.touch_empty_n),
+                                    Metrics::pct(tot.phys_empty_top1, tot.phys_empty_n),
+                                    fp,
+                                );
+                            }
                         }
                     }
                 }
@@ -485,7 +628,9 @@ fn main() {
         }
         println!("Best weights: {:?}", best_w);
     } else {
-        engine.lm_weights = lm_w;
+        if custom_weights {
+            engine.lm_weights = lm_w;
+        }
         let (total, per_dom) = run_eval_with_engine(&mut engine, &sentences, 20261119, max_per_domain);
         println!("----------------------------------------------------------------------------------------------------------------------------------");
         for (dom, m) in &per_dom {

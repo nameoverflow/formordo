@@ -1,6 +1,7 @@
 use crate::code::{expand_wildcards, PackedCode};
 use crate::config::{FourthEmptyBehavior, ShiftToggleMode, WubiConfig, WubiSchema};
 use crate::format::{AuxView, DictView, ENTRY_FLAG_SYMBOL};
+use crate::neural::NeuralContextTracker;
 use crate::typo::{generate_hypotheses, softmax_confidences, CorrectionKind, KeyLayout, KeyObs};
 use crate::user_data::UserStore;
 use std::collections::{HashMap, HashSet};
@@ -56,7 +57,7 @@ pub const KEY_PAGE_UP: u16 = 0x74;
 pub const KEY_PAGE_DOWN: u16 = 0x79;
 
 /// Calibrated weights combining spatial keystroke log-likelihood, lexical prior,
-/// and corpus N-gram context in the Bayesian typo decoder.
+/// corpus N-gram context, and `Micro-RWKV-7` neural state log-probability.
 #[derive(Clone, Copy, Debug)]
 pub struct LmWeights {
     pub spatial_scale: f32,
@@ -67,10 +68,11 @@ pub struct LmWeights {
     pub trigram_scale: f32,
     pub cross_trigram_scale: f32,
     pub phrase_bonus: f32,
+    pub neural_scale: f32,
 }
 
-impl Default for LmWeights {
-    fn default() -> Self {
+impl LmWeights {
+    pub const fn default_ngram() -> Self {
         Self {
             spatial_scale: 2.35,
             dict_prior_scale: 0.45,
@@ -80,7 +82,28 @@ impl Default for LmWeights {
             trigram_scale: 1.00,
             cross_trigram_scale: 0.65,
             phrase_bonus: 0.65,
+            neural_scale: 0.0,
         }
+    }
+
+    pub const fn default_neural() -> Self {
+        Self {
+            spatial_scale: 2.94,
+            dict_prior_scale: 0.30,
+            corpus_unigram_scale: 0.22,
+            internal_bigram_scale: 0.28,
+            bigram_scale: 0.65,
+            trigram_scale: 0.65,
+            cross_trigram_scale: 0.45,
+            phrase_bonus: 0.65,
+            neural_scale: 0.68,
+        }
+    }
+}
+
+impl Default for LmWeights {
+    fn default() -> Self {
+        Self::default_neural()
     }
 }
 
@@ -91,6 +114,7 @@ pub struct WubiEngine {
     pub user: UserStore,
     pub key_layout: KeyLayout,
     pub lm_weights: LmWeights,
+    pub neural_tracker: NeuralContextTracker,
 
     pub ascii_mode: bool,
     raw_code: String,
@@ -118,6 +142,7 @@ impl WubiEngine {
             user: UserStore::default(),
             key_layout: KeyLayout::default(),
             lm_weights: LmWeights::default(),
+            neural_tracker: NeuralContextTracker::default(),
             ascii_mode: false,
             raw_code: String::new(),
             observations: Vec::new(),
@@ -140,6 +165,40 @@ impl WubiEngine {
                 self.recent_context.clear();
             }
         }
+        if let Some(nv) = self.aux.as_ref().and_then(|a| a.neural_view()) {
+            // Feed the full active clause (up to 32 chars!) into Micro-RWKV-7 before truncating trigram window
+            let clause: String = self
+                .recent_context
+                .iter()
+                .skip(self.recent_context.len().saturating_sub(32))
+                .collect();
+            self.neural_tracker.set_context_str(&nv, &clause);
+        }
+        if self.recent_context.len() > 8 {
+            let drain_n = self.recent_context.len() - 8;
+            self.recent_context.drain(..drain_n);
+        }
+        self.last_committed = self.recent_context.iter().collect();
+    }
+
+    /// Incrementally append committed CJK text to rolling context (O(len(text)) instead of O(sentence)).
+    pub fn append_recent_context(&mut self, text: &str) {
+        let mut all_cjk = !text.is_empty();
+        for ch in text.chars() {
+            if is_cjk_char(ch) {
+                self.recent_context.push(ch);
+            } else {
+                self.recent_context.clear();
+                all_cjk = false;
+            }
+        }
+        if let Some(nv) = self.aux.as_ref().and_then(|a| a.neural_view()) {
+            if all_cjk {
+                self.neural_tracker.commit_cjk_str(&nv, text);
+            } else {
+                self.neural_tracker.reset_to_bos(Some(&nv));
+            }
+        }
         if self.recent_context.len() > 8 {
             let drain_n = self.recent_context.len() - 8;
             self.recent_context.drain(..drain_n);
@@ -151,6 +210,8 @@ impl WubiEngine {
     pub fn clear_context(&mut self) {
         self.recent_context.clear();
         self.last_committed.clear();
+        let nv = self.aux.as_ref().and_then(|a| a.neural_view());
+        self.neural_tracker.reset_to_bos(nv.as_ref());
     }
 
     /// Record a tapped idle-bar predicted word: updates personal word/char n-grams and advances
@@ -170,11 +231,20 @@ impl WubiEngine {
             self.dicts[dict_idx].as_ref(),
         );
         self.last_committed = text.to_string();
+        let mut all_cjk = !text.is_empty();
         for ch in text.chars() {
             if is_cjk_char(ch) {
                 self.recent_context.push(ch);
             } else {
                 self.recent_context.clear();
+                all_cjk = false;
+            }
+        }
+        if let Some(nv) = self.aux.as_ref().and_then(|a| a.neural_view()) {
+            if all_cjk {
+                self.neural_tracker.commit_cjk_str(&nv, text);
+            } else {
+                self.neural_tracker.reset_to_bos(Some(&nv));
             }
         }
         if self.recent_context.len() > 8 {
@@ -272,32 +342,64 @@ impl WubiEngine {
                 }
             }
 
+            let nv_opt = aux
+                .neural_view()
+                .filter(|_| self.neural_tracker.is_ready());
+            if let Some(ref nv) = nv_opt {
+                for (c1, _lp) in nv.top_next_chars(&self.neural_tracker.active, 24) {
+                    if is_cjk_char(c1) {
+                        first_map.entry(c1).or_insert_with(|| {
+                            (
+                                aux.unigram_prior(c1).unwrap_or(5.0),
+                                aux.bigram_boost(p1, c1),
+                                p2.map(|prev2| aux.trigram_boost(prev2, p1, c1))
+                                    .unwrap_or(0.0),
+                            )
+                        });
+                    }
+                }
+            }
+
             // Check if `(p2, p1)` itself is a cohesive 2-char word (e.g. 情绪, 什么, 今天, 这个)
             let prev2_is_word = prev2_str
                 .as_deref()
                 .and_then(|s| dict.and_then(|d| d.contains_exact_word(s)))
                 .is_some();
 
-            let mut first_ranked: Vec<(char, f32, f32, f32, f32)> = first_map
+            let mut first_ranked: Vec<(char, f32, f32, f32, f32, Option<f32>)> = first_map
                 .into_iter()
                 .filter_map(|(c1, (uni, bi, tri))| {
-                    if uni < 4.0 && tri < 1.0 {
+                    let rwkv_lp1 = nv_opt
+                        .as_ref()
+                        .map(|nv| nv.score_next_char(&self.neural_tracker.active, c1));
+                    if uni < 4.0 && tri < 1.0 && !rwkv_lp1.map(|lp| lp > -4.5).unwrap_or(false) {
                         return None;
                     }
-                    // Avoid repeating same char unless strong trigram (e.g. 哈哈)
-                    if c1 == p1 && tri < 1.5 && bi < 3.5 {
+                    // Avoid repeating same char unless strong trigram / neural (e.g. 哈哈)
+                    if c1 == p1
+                        && tri < 1.5
+                        && bi < 3.5
+                        && !rwkv_lp1.map(|lp| lp > -1.8).unwrap_or(false)
+                    {
                         return None;
                     }
                     // When `(p2, p1)` is a 2-char word (like 情绪), discount `p1->c1` pairs that have
-                    // zero trigram support (avoids homograph bleed like 光绪->年间 leaking into 情绪).
+                    // zero trigram AND weak neural support (avoids homograph bleed like 光绪->年间).
                     let context_discount = if prev2_is_word && tri == 0.0 {
-                        1.45
+                        if rwkv_lp1.map(|lp| lp > -4.8).unwrap_or(false) {
+                            0.15
+                        } else {
+                            1.45
+                        }
                     } else {
                         0.0
                     };
-                    // Conditional log-prob proxy: log P(c1 | p2, p1) ≈ uni(c1) + bi(p1,c1) + tri(p2,p1,c1)
-                    let cond = 1.00 * uni + 0.78 * bi + 1.55 * tri - context_discount;
-                    Some((c1, cond, uni, bi, tri))
+                    let rwkv_boost = rwkv_lp1
+                        .map(|lp| (lp + 6.0).clamp(-2.5, 5.5) * 0.90)
+                        .unwrap_or(0.0);
+                    // Conditional log-prob proxy: log P(c1 | clause) ≈ N-gram + Micro-RWKV-7 state
+                    let cond = 1.00 * uni + 0.78 * bi + 1.55 * tri + rwkv_boost - context_discount;
+                    Some((c1, cond, uni, bi, tri, rwkv_lp1))
                 })
                 .collect();
             first_ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
@@ -305,22 +407,23 @@ impl WubiEngine {
 
             let mut strong_phrase_for_c1 = HashMap::<char, f32>::new();
 
-            for &(c1, cond1, uni1, bi1, tri1) in first_ranked.iter().take(14) {
+            for &(c1, cond1, uni1, bi1, tri1, rwkv_lp1) in first_ranked.iter().take(14) {
                 // Determine whether `c1` completes the current in-progress 2-char or 3-char word
                 // (e.g. 不知->道, 小红->书, 大模->型, 没问->题, 性价->比, 绷不->住, 输入->法)
                 let mut is_tri_comp = false;
                 let mut is_bi_comp = false;
                 let mut comp_bonus = 0.0f32;
+                let strong_rwkv_comp = rwkv_lp1.map(|lp| lp > -1.35).unwrap_or(false);
                 if let Some(prev2) = p2 {
                     let mut s3 = String::with_capacity(12);
                     s3.push(prev2);
                     s3.push(p1);
                     s3.push(c1);
                     let in_dict_3 = dict.and_then(|d| d.contains_exact_word(&s3)).is_some();
-                    if in_dict_3 || (tri1 >= 0.35 && bi1 >= 1.0) {
+                    if in_dict_3 || strong_rwkv_comp || (tri1 >= 0.35 && bi1 >= 1.0) {
                         is_tri_comp = true;
-                        comp_bonus = if in_dict_3 {
-                            3.35
+                        comp_bonus = if in_dict_3 || strong_rwkv_comp {
+                            3.45
                         } else {
                             (1.30 + 0.70 * tri1).min(2.90)
                         };
@@ -329,7 +432,7 @@ impl WubiEngine {
                     let mut s2 = String::with_capacity(8);
                     s2.push(p1);
                     s2.push(c1);
-                    if d.contains_exact_word(&s2).is_some() && bi1 >= 2.6 {
+                    if d.contains_exact_word(&s2).is_some() && (bi1 >= 2.6 || strong_rwkv_comp) {
                         is_bi_comp = true;
                         comp_bonus = 1.95;
                     }
@@ -425,9 +528,15 @@ impl WubiEngine {
                     if wt < 50_000 && tri12 < 1.0 {
                         continue;
                     }
+                    let rwkv_w2 = nv_opt
+                        .as_ref()
+                        .map(|nv| nv.score_phrase_fast(&self.neural_tracker.active, &w2));
                     // If `c1` is a standalone common char (会/是/有/后/分) and `(p1,c1,c2)` has ZERO
-                    // trigram evidence, don't hallucinate unrelated compounds (like 真的+会员, 今天+是否)!
-                    if is_standalone_common_char(c1) && tri12 == 0.0 {
+                    // trigram evidence and weak neural phrase support, don't hallucinate unrelated compounds!
+                    if is_standalone_common_char(c1)
+                        && tri12 == 0.0
+                        && !rwkv_w2.map(|lp| lp > -4.2).unwrap_or(false)
+                    {
                         continue;
                     }
 
@@ -443,14 +552,23 @@ impl WubiEngine {
                         }
                     }
 
-                    let tri_ground_bonus = if tri12 > 0.0 { 0.85 } else { -0.65 };
+                    let tri_ground_bonus = if tri12 > 0.0 {
+                        0.85
+                    } else if rwkv_w2.map(|lp| lp > -4.8).unwrap_or(false) {
+                        0.35
+                    } else {
+                        -0.65
+                    };
+                    let rwkv_w2_boost = rwkv_w2
+                        .map(|lp| (lp + 5.8).clamp(-1.8, 4.5) * 0.85)
+                        .unwrap_or(0.0);
                     let freq_bonus = (((wt as f32) + 100.0).ln() - 11.0).clamp(-1.0, 2.2) * 0.40;
                     let split_penalty = if is_bi_comp && comp3_bonus == 0.0 && tri12 < 0.8 {
                         1.25
                     } else {
                         0.0
                     };
-                    let sc2 = cond1 + raw2 + tri_ground_bonus + freq_bonus + comp3_bonus - 3.10 - split_penalty;
+                    let sc2 = cond1 + raw2 + tri_ground_bonus + rwkv_w2_boost + freq_bonus + comp3_bonus - 3.10 - split_penalty;
                     if bi12 >= 3.4 && sc2 > cond1 {
                         let entry = strong_phrase_for_c1.entry(c1).or_insert(f32::NEG_INFINITY);
                         if sc2 > *entry {
@@ -538,6 +656,13 @@ impl WubiEngine {
     }
 
     pub fn set_aux(&mut self, aux: AuxView) {
+        if let Some(nv) = aux.neural_view() {
+            self.neural_tracker.init_with_model(&nv);
+            self.lm_weights = LmWeights::default_neural();
+        } else {
+            self.neural_tracker = NeuralContextTracker::default();
+            self.lm_weights = LmWeights::default_ngram();
+        }
         self.aux = Some(aux);
         if !self.raw_code.is_empty() {
             self.rebuild_candidates();
@@ -642,11 +767,11 @@ impl WubiEngine {
             }
             self.clear_composition();
             self.user.break_single_burst();
-            self.recent_context.clear();
+            self.clear_context();
         }
         self.ascii_mode = !self.ascii_mode;
         if self.ascii_mode {
-            self.recent_context.clear();
+            self.clear_context();
         }
         out
     }
@@ -713,6 +838,82 @@ impl WubiEngine {
             mask |= 1u32 << 25;
         }
         mask
+    }
+
+    /// 26-element continuous touch hitbox weight vector (`0` = dead key, `100` = neutral valid key,
+    /// `50..=180` = `Micro-RWKV-7` context-weighted valid key).
+    /// Powers Key #1 predictive gutter bias AND Keys #2..#4 valid-vs-valid gutter disambiguation!
+    pub fn next_key_priors(&self) -> [u8; 26] {
+        let mut out = [100u8; 26];
+        if self.ascii_mode || !self.config.typo.enabled {
+            return out;
+        }
+        let bytes = self.raw_code.as_bytes();
+        if bytes.len() >= 4 || bytes.contains(&b'z') {
+            return out;
+        }
+
+        // Case 1: Key #1 (`raw_code` is empty) — use cached `Micro-RWKV-7` first-stroke head!
+        if bytes.is_empty() {
+            if self.neural_tracker.is_ready() {
+                // Uniform log-prob across 25 Wubi keys ('a'..'y') is ln(1/25) = -3.2189
+                for idx in 0..25usize {
+                    let lp = self.neural_tracker.active.key1_logp[idx];
+                    let delta = lp - (-3.2189f32);
+                    out[idx] = (100.0 + 20.0 * delta).round().clamp(72.0, 168.0) as u8;
+                }
+            }
+            return out;
+        }
+
+        // Case 2: Keys #2..#4 (`1 <= len <= 3`) — combine dictionary validity with RWKV context priors!
+        let mask = self.valid_next_mask();
+        if mask == 0x03FF_FFFF || mask == 0 {
+            return out;
+        }
+        for idx in 0..26usize {
+            if (mask & (1u32 << idx)) == 0 {
+                out[idx] = 0;
+            }
+        }
+
+        if let (Some(nv), Some(dict)) = (
+            self.aux.as_ref().and_then(|a| a.neural_view()),
+            self.active_dict(),
+        ) {
+            if self.neural_tracker.is_ready() {
+                let best_conts =
+                    dict.best_continuation_per_letter(bytes, self.config.enable_rare_charset);
+                let mut raw_s = [f32::NEG_INFINITY; 25];
+                let mut sum_s = 0.0f32;
+                let mut cnt_s = 0usize;
+
+                for idx in 0..25usize {
+                    if out[idx] == 0 {
+                        continue;
+                    }
+                    if let Some(e) = best_conts[idx] {
+                        let ns = nv.score_phrase_fast(&self.neural_tracker.active, e.text);
+                        let dp = 0.16 * ((e.weight as f32) + 50.0).ln();
+                        let s = ns + dp;
+                        raw_s[idx] = s;
+                        sum_s += s;
+                        cnt_s += 1;
+                    }
+                }
+                if cnt_s >= 2 {
+                    let mean_s = sum_s / (cnt_s as f32);
+                    for idx in 0..25usize {
+                        if raw_s[idx].is_finite() {
+                            out[idx] = (100.0 + 15.0 * (raw_s[idx] - mean_s))
+                                .round()
+                                .clamp(54.0, 176.0) as u8;
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Push a touchscreen letter tap with view/normalized coordinates `(x, y)` (used by iOS keyboard & touch tests).
@@ -799,6 +1000,8 @@ impl WubiEngine {
                 if self.raw_code.is_empty() {
                     self.user.break_single_burst();
                     self.recent_context.clear();
+                    let nv = self.aux.as_ref().and_then(|a| a.neural_view());
+                    self.neural_tracker.pop_commit_or_reset(nv.as_ref());
                     return EngineOutput::default();
                 }
                 self.raw_code.pop();
@@ -828,13 +1031,13 @@ impl WubiEngine {
             KEY_RETURN | KEY_ENTER_KP => {
                 if self.raw_code.is_empty() {
                     self.user.break_single_burst();
-                    self.recent_context.clear();
+                    self.clear_context();
                     return EngineOutput::default();
                 }
                 let raw = self.raw_code.clone();
                 self.clear_composition();
                 self.user.break_single_burst();
-                self.recent_context.clear();
+                self.clear_context();
                 return EngineOutput {
                     consumed: true,
                     commit_text: raw,
@@ -844,7 +1047,7 @@ impl WubiEngine {
             KEY_SPACE => {
                 if self.raw_code.is_empty() {
                     self.user.break_single_burst();
-                    self.recent_context.clear();
+                    self.clear_context();
                     return EngineOutput::default();
                 }
                 if let Some(out) = self.select_page_candidate(0, timestamp_ms) {
@@ -901,7 +1104,7 @@ impl WubiEngine {
         if c.is_ascii_uppercase() {
             if self.raw_code.is_empty() {
                 self.user.break_single_burst();
-                self.recent_context.clear();
+                self.clear_context();
                 return EngineOutput::default();
             }
             let mut committed = String::new();
@@ -912,7 +1115,7 @@ impl WubiEngine {
             }
             self.clear_composition();
             self.user.break_single_burst();
-            self.recent_context.clear();
+            self.clear_context();
             committed.push(c);
             return EngineOutput {
                 consumed: true,
@@ -980,7 +1183,7 @@ impl WubiEngine {
                     self.clear_composition();
                 }
                 self.user.break_single_burst();
-                self.recent_context.clear();
+                self.clear_context();
                 text.push_str(&mapped);
                 return EngineOutput {
                     consumed: true,
@@ -1156,11 +1359,20 @@ impl WubiEngine {
             }
         }
         self.last_committed = text.to_string();
+        let mut all_cjk = !text.is_empty();
         for ch in text.chars() {
             if is_cjk_char(ch) {
                 self.recent_context.push(ch);
             } else {
                 self.recent_context.clear();
+                all_cjk = false;
+            }
+        }
+        if let Some(nv) = self.aux.as_ref().and_then(|a| a.neural_view()) {
+            if all_cjk {
+                self.neural_tracker.commit_cjk_str(&nv, text);
+            } else {
+                self.neural_tracker.reset_to_bos(Some(&nv));
             }
         }
         if self.recent_context.len() > 8 {
@@ -1384,6 +1596,11 @@ impl WubiEngine {
             return;
         };
         let lm_w = self.lm_weights;
+        let neural_view = if lm_w.neural_scale > 0.0 && self.neural_tracker.is_ready() {
+            self.aux.as_ref().and_then(|a| a.neural_view())
+        } else {
+            None
+        };
 
         // 1. Collect Exact Candidates (preserving canonical Wubi ordering!)
         struct ExactItem {
@@ -1393,6 +1610,7 @@ impl WubiEngine {
             badge: CandidateBadge,
             sort_bucket: u8, // 0 = exact primary, 1 = dynamic/dict exact, 2 = demoted strict_shortcode, 3 = prefix completion
             order_score: f64,
+            base_score: f32,
             posterior_score: f32,
         }
 
@@ -1413,9 +1631,14 @@ impl WubiEngine {
                 utext,
                 &lm_w,
             );
-            let post = 8.8 + ((ucnt as f32 + 1.0).ln() * 0.8) + ctx;
+            let n_fast = neural_view
+                .as_ref()
+                .map(|nv| lm_w.neural_scale * smooth_neural_score(nv.score_phrase_fast(&self.neural_tracker.active, utext)))
+                .unwrap_or(0.0);
+            let base = 8.8 + ((ucnt as f32 + 1.0).ln() * 0.8) + ctx;
+            let post = base + n_fast;
             let ord = if self.config.dynamic_word_freq {
-                1_000_000.0 + (ucnt as f64) * 100.0 + (ctx as f64) * 500.0 - (idx as f64)
+                1_000_000.0 + (ucnt as f64) * 100.0 + ((ctx + n_fast) as f64) * 500.0 - (idx as f64)
             } else {
                 500_000.0 - (idx as f64)
             };
@@ -1426,6 +1649,7 @@ impl WubiEngine {
                 badge: CandidateBadge::UserPhrase,
                 sort_bucket: 1,
                 order_score: ord,
+                base_score: base,
                 posterior_score: post,
             });
         }
@@ -1479,7 +1703,12 @@ impl WubiEngine {
                 exact_code.len(),
                 &lm_w,
             );
-            let post = prior + ctx;
+            let n_fast = neural_view
+                .as_ref()
+                .map(|nv| lm_w.neural_scale * smooth_neural_score(nv.score_phrase_fast(&self.neural_tracker.active, entry.text)))
+                .unwrap_or(0.0);
+            let base = prior + ctx;
+            let post = base + n_fast;
 
             // Preserve #1 fixed muscle-memory slot unless dynamic freq is explicitly enabled for this kind!
             let allow_dyn = if entry.is_single_char() {
@@ -1494,7 +1723,8 @@ impl WubiEngine {
                 // Sacred #1 slot for fixed-order single-char muscle memory!
                 (0u8, 10_000_000.0)
             } else if allow_dyn {
-                let dyn_bonus = (ctx as f64) * 1800.0 + (self.user.unigram_boost(entry.text) as f64) * 1200.0;
+                let dyn_bonus = ((ctx + n_fast * 0.5) as f64) * 1800.0
+                    + (self.user.unigram_boost(entry.text) as f64) * 1200.0;
                 let base_rank_score = 900_000.0 - (rank as f64) * 1500.0;
                 (1u8, base_rank_score + dyn_bonus)
             } else {
@@ -1508,6 +1738,7 @@ impl WubiEngine {
                 badge,
                 sort_bucket: bucket,
                 order_score: ord,
+                base_score: base,
                 posterior_score: post,
             });
         }
@@ -1525,6 +1756,7 @@ impl WubiEngine {
                         badge: CandidateBadge::UserPhrase,
                         sort_bucket: if self.config.shortest_code_first { 3 } else { 1 },
                         order_score: 50_000.0 + ucnt as f64,
+                        base_score: 7.5,
                         posterior_score: 7.5,
                     });
                 }
@@ -1538,6 +1770,7 @@ impl WubiEngine {
                         ""
                     };
                     let bucket = if self.config.shortest_code_first { 3 } else { 1 };
+                    let bs = 0.45 * ((e.weight as f32) + 50.0).ln();
                     exact_items.push(ExactItem {
                         text: e.text.to_string(),
                         code: e.code,
@@ -1549,7 +1782,8 @@ impl WubiEngine {
                         badge: CandidateBadge::None,
                         sort_bucket: bucket,
                         order_score: (e.weight as f64) * 0.0001,
-                        posterior_score: 0.45 * ((e.weight as f32) + 50.0).ln(),
+                        base_score: bs,
+                        posterior_score: bs,
                     });
                 }
             }
@@ -1565,10 +1799,11 @@ impl WubiEngine {
                 })
         });
 
-        // 2. Statistical + Touch-Region Typo-Correction Decoder (for 2..=4 key codes)
+        // 2. Statistical + Touch-Region + Neural RWKV-7 Typo-Correction Decoder (for 2..=4 key codes)
         struct FuzzyItem {
             text: String,
             code: PackedCode,
+            base_score: f32,
             posterior_score: f32,
             boundary_slip: bool,
             kind: CorrectionKind,
@@ -1618,12 +1853,17 @@ impl WubiEngine {
                         utext,
                         &lm_w,
                     );
+                    let n_fast = neural_view
+                        .as_ref()
+                        .map(|nv| lm_w.neural_scale * smooth_neural_score(nv.score_phrase_fast(&self.neural_tracker.active, utext)))
+                        .unwrap_or(0.0);
                     let prior = 9.0 + ((ucnt as f32 + 1.0).ln() * 0.75);
-                    let post = spatial_scale * h.spatial_logp + prior + ctx;
+                    let base = spatial_scale * h.spatial_logp + prior + ctx;
                     fuzzy_items.push(FuzzyItem {
                         text: utext.to_string(),
                         code: h.code,
-                        posterior_score: post,
+                        base_score: base,
+                        posterior_score: base + n_fast,
                         boundary_slip: h.boundary_slip,
                         kind: h.kind,
                     });
@@ -1633,7 +1873,6 @@ impl WubiEngine {
                     if !fuzzy_seen.insert(e.text.to_string()) {
                         continue;
                     }
-                    // Skip zero-weight ultra-obscure items unless modern corpus knows them well
                     if e.weight < 5_000 {
                         let known_modern = self
                             .aux
@@ -1661,21 +1900,65 @@ impl WubiEngine {
                         h.code.len(),
                         &lm_w,
                     );
-                    let post = spatial_scale * h.spatial_logp + prior + ctx;
+                    let n_fast = neural_view
+                        .as_ref()
+                        .map(|nv| lm_w.neural_scale * smooth_neural_score(nv.score_phrase_fast(&self.neural_tracker.active, e.text)))
+                        .unwrap_or(0.0);
+                    let base = spatial_scale * h.spatial_logp + prior + ctx;
                     fuzzy_items.push(FuzzyItem {
                         text: e.text.to_string(),
                         code: h.code,
-                        posterior_score: post,
+                        base_score: base,
+                        posterior_score: base + n_fast,
                         boundary_slip: h.boundary_slip,
                         kind: h.kind,
                     });
                 }
             }
+
             fuzzy_items.sort_by(|a, b| {
                 b.posterior_score
                     .partial_cmp(&a.posterior_score)
                     .unwrap_or(core::cmp::Ordering::Equal)
             });
+
+            // Stage 2b: Exact multi-token RWKV-7 recurrent unroll only when fuzzy candidates are
+            // competitive with exact (or exact is empty), keeping ordinary keystrokes < 15 µs!
+            if let Some(ref nv) = neural_view {
+                if !fuzzy_items.is_empty() {
+                    let best_exact_fast = exact_items
+                        .iter()
+                        .filter(|x| x.sort_bucket <= 2)
+                        .map(|x| x.posterior_score)
+                        .fold(f32::NEG_INFINITY, f32::max);
+                    let best_fuzzy_fast = fuzzy_items[0].posterior_score;
+                    let needs_exact_unroll = !best_exact_fast.is_finite()
+                        || (best_fuzzy_fast >= best_exact_fast - 5.0);
+                    if needs_exact_unroll {
+                        for item in exact_items.iter_mut().filter(|x| x.sort_bucket <= 2).take(2) {
+                            if item.text.chars().nth(1).is_some() {
+                                let n_ex = lm_w.neural_scale
+                                    * smooth_neural_score(nv.score_phrase_exact(&self.neural_tracker.active, &item.text));
+                                item.posterior_score = item.base_score + n_ex;
+                            }
+                        }
+                        let refine_k = fuzzy_items.len().min(4);
+                        for f in &mut fuzzy_items[..refine_k] {
+                            if f.text.chars().nth(1).is_some() {
+                                let n_ex = lm_w.neural_scale
+                                    * smooth_neural_score(nv.score_phrase_exact(&self.neural_tracker.active, &f.text));
+                                f.posterior_score = f.base_score + n_ex;
+                            }
+                        }
+                        fuzzy_items[..refine_k].sort_by(|a, b| {
+                            b.posterior_score
+                                .partial_cmp(&a.posterior_score)
+                                .unwrap_or(core::cmp::Ordering::Equal)
+                        });
+                    }
+                }
+            }
+
             fuzzy_items.truncate(4);
         }
 
@@ -1770,6 +2053,13 @@ impl WubiEngine {
             self.candidates.extend(secondary_fuzzy);
         }
     }
+}
+
+#[inline]
+fn smooth_neural_score(raw_lp: f32) -> f32 {
+    // Soft floor (-13.5 nats ~ 1.4e-6) guards against extreme OOV outliers while keeping full
+    // negative penalty against nonsensical colliding typos (-10..-13.5 nats).
+    raw_lp.clamp(-13.5, -0.02) + 11.0
 }
 
 #[inline]

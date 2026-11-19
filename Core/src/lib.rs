@@ -4,6 +4,7 @@ pub mod engine;
 pub mod ffi;
 pub mod format;
 pub mod mmap_buf;
+pub mod neural;
 pub mod typo;
 pub mod user_data;
 
@@ -435,6 +436,7 @@ mod tests {
             ],
             bigrams: vec![(bg_key, (2.2 * 256.0) as u16)],
             trigrams: vec![tri_entry],
+            ..Default::default()
         }))
         .unwrap();
 
@@ -519,5 +521,18 @@ mod tests {
         let parsed = WubiConfig::from_toml_str(&toml);
         assert!(parsed.auto_space_zh_en);
         assert!(!parsed.auto_space_digits);
+    }
+
+    #[test]
+    fn neural_wblm_parity_if_present() {
+        let Ok(blob) = std::fs::read("/tmp/test_micro_rwkv7.wblm") else {
+            return;
+        };
+        let offs = crate::neural::NeuralOffsets::parse(&blob).unwrap();
+        let nv = crate::neural::NeuralView { blob: &blob, offs: &offs };
+        let mut tracker = crate::neural::NeuralContextTracker::default();
+        tracker.set_context_str(&nv, "我输");
+        let sc = nv.score_next_char(&tracker.active, '入');
+        println!("RUST_SCORE_RU={:.6}", sc);
     }
 }

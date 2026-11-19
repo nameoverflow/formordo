@@ -79,11 +79,19 @@ fn serialize_action_and_state(engine: &WubiEngine, act: Option<&EngineOutput>) -
         .filter(|k| k.samples > 0)
         .count();
     j.push_str(&format!(
-        ",\"userPhraseCount\":{},\"calibratedKeyCount\":{},\"validNextMask\":{},\"candidates\":[",
+        ",\"userPhraseCount\":{},\"calibratedKeyCount\":{},\"validNextMask\":{},\"nextKeyPriors\":[",
         engine.user.phrases.len(),
         calibrated_keys,
         engine.valid_next_mask()
     ));
+    let priors = engine.next_key_priors();
+    for (pi, &pv) in priors.iter().enumerate() {
+        if pi > 0 {
+            j.push(',');
+        }
+        j.push_str(&pv.to_string());
+    }
+    j.push_str("],\"candidates\":[");
 
     for (idx, c) in engine.page_candidates().iter().enumerate() {
         if idx > 0 {

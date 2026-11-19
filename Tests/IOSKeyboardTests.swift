@@ -307,7 +307,7 @@ struct IOSKeyboardTests {
         let afterDenied = clipStore.lookup(hasFullAccess: true, enabled: true, hasStrings: true, changeCount: 12, prefersOTP: false, now: 1405)
         assert(afterDenied == .none, "Denied pasteboard read must not re-prompt for same changeCount")
 
-        // 14. Idle next-word / next-char prediction via existing WBAUX002 N-gram FFI
+        // 14. Idle next-word / next-char prediction via WBAUX003 (N-gram + Micro-RWKV-7) FFI
         bridge.setContext("")
         let starters = bridge.predictNextWords(maxCount: 8)
         assert(starters.count == 8 && starters.first == "我")
@@ -344,6 +344,54 @@ struct IOSKeyboardTests {
         clipGate.resetForKeyboardAppearance()
         assert(clipGate.shouldAllowDisplay(for: 21) == true, "App switch before typing must allow display again")
 
-        print("✓ All iOS 26 native grid, lowercase/shift, trackpad, ergonomic Y-bias, dynamic next-key, clipboard & idle N-gram prediction tests passed!")
+        // 16. Verify neural `nextKeyPriors` disambiguates BOTH:
+        //     (a) Key #1 predictive gutter taps (`validNextMask == 0x03FF_FFFF`), and
+        //     (b) Keys #2..#4 valid-vs-valid gutter ties (e.g. `f` vs `g` when both are valid continuations!),
+        //     while strictly preserving the `3.0pt x 2.6pt` Sacred Keycap Core!
+        let f220 = snap220.keys.first(where: { $0.kind == .letter(UInt8(ascii: "f")) })!
+        let g220 = snap220.keys.first(where: { $0.kind == .letter(UInt8(ascii: "g")) })!
+        let fgMidGutter = CGPoint(x: (f220.frame.maxX + g220.frame.minX) * 0.5 - 0.8, y: f220.frame.midY)
+
+        // (a) Key #1: without neural priors, point 0.8pt closer to 'f' hits 'f'; with strong 'g' prior, snaps to 'g'!
+        let neutralHit1 = IOSKeyboardLayoutEngine.hitTest(point: fgMidGutter, in: snap220)
+        assert(neutralHit1?.kind == .letter(UInt8(ascii: "f")))
+        var priorsKey1 = Array(repeating: UInt8(100), count: 26)
+        priorsKey1[Int(UInt8(ascii: "g") - 97)] = 162
+        priorsKey1[Int(UInt8(ascii: "f") - 97)] = 74
+        let neuralHit1 = IOSKeyboardLayoutEngine.hitTest(
+            point: fgMidGutter,
+            in: snap220,
+            validNextMask: 0x03FF_FFFF,
+            nextKeyPriors: priorsKey1
+        )
+        assert(neuralHit1?.kind == .letter(UInt8(ascii: "g")), "Expected Key #1 neural prior to pull disputed gutter tap to 'g'")
+
+        // (b) Keys #2..#4 valid-vs-valid gutter tie (both 'f' and 'g' have mask bit = 1, e.g. `im+g 没理` vs `im+f 油井`)
+        let bothFGValidMask: UInt32 = (1 << UInt32(UInt8(ascii: "f") - 97)) | (1 << UInt32(UInt8(ascii: "g") - 97))
+        let bevelInsideF = CGPoint(x: f220.frame.maxX - 1.8, y: f220.frame.midY)
+        let flatMaskHit = IOSKeyboardLayoutEngine.hitTest(point: bevelInsideF, in: snap220, validNextMask: bothFGValidMask)
+        assert(flatMaskHit?.kind == .letter(UInt8(ascii: "f")), "Flat binary mask cannot break valid-vs-valid tie toward 'g'")
+        var priorsValidTie = Array(repeating: UInt8(0), count: 26)
+        priorsValidTie[Int(UInt8(ascii: "g") - 97)] = 168
+        priorsValidTie[Int(UInt8(ascii: "f") - 97)] = 58
+        let neuralTieHit = IOSKeyboardLayoutEngine.hitTest(
+            point: bevelInsideF,
+            in: snap220,
+            validNextMask: bothFGValidMask,
+            nextKeyPriors: priorsValidTie
+        )
+        assert(neuralTieHit?.kind == .letter(UInt8(ascii: "g")), "Expected neural valid-vs-valid prior to snap 'f' bevel slip onto 'g'")
+
+        // (c) Sacred Keycap Core (`>= 3.0pt` inside 'f') is STILL protected even under maximum 'g' neural prior!
+        let coreInsideF = CGPoint(x: f220.frame.maxX - 3.6, y: f220.frame.midY)
+        let corePreserved = IOSKeyboardLayoutEngine.hitTest(
+            point: coreInsideF,
+            in: snap220,
+            validNextMask: bothFGValidMask,
+            nextKeyPriors: priorsValidTie
+        )
+        assert(corePreserved?.kind == .letter(UInt8(ascii: "f")), "Sacred keycap core must never be overridden by neural priors")
+
+        print("✓ All iOS 26 native grid, lowercase/shift, trackpad, ergonomic Y-bias, dynamic neural next-key, clipboard & idle prediction tests passed!")
     }
 }

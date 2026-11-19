@@ -811,7 +811,9 @@ public final class KeyboardViewController: UIInputViewController {
         layoutEngine.schemaId = st.schemaId
         layoutEngine.isComposing = !st.preedit.isEmpty
         layoutEngine.validNextMask = st.validNextMask
+        layoutEngine.nextKeyPriors = st.nextKeyPriors
         keyCanvas.validNextMask = st.validNextMask
+        keyCanvas.nextKeyPriors = st.nextKeyPriors
         ribbonView.update(
             state: st,
             dark: isDarkAppearance,

@@ -379,6 +379,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
 
     private var snapshot: IOSKeyboardLayoutEngine.LayoutSnapshot?
     var validNextMask: UInt32 = 0x03FF_FFFF
+    var nextKeyPriors: [UInt8] = Array(repeating: 100, count: 26)
     /// ID of Row-0 key whose glyph is seamlessly covered by the docked callout silhouette.
     var coveredCalloutKeyId: String? {
         didSet {
@@ -604,7 +605,8 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                   let hit = IOSKeyboardLayoutEngine.hitTest(
                       point: point,
                       in: snap,
-                      validNextMask: validNextMask
+                      validNextMask: validNextMask,
+                      nextKeyPriors: nextKeyPriors
                   ) else {
                 continue
             }
@@ -758,7 +760,7 @@ final class IOSKeyCanvasView: UIInputView, UIInputViewAudioFeedback {
                 continue
             }
 
-            if let hit = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap, validNextMask: validNextMask),
+            if let hit = IOSKeyboardLayoutEngine.hitTest(point: pt, in: snap, validNextMask: validNextMask, nextKeyPriors: nextKeyPriors),
                hit.id != state.currentKey.id {
                 // Character touches may slide only onto character keys — never onto `⌫` (which would silently
                 // drop the key in `onKeyTouchUp`), `⇧`, `Space`, `123`, `中/英`, or `Return`!

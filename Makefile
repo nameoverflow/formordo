@@ -23,7 +23,11 @@ $(CORE_LIB): $(CORE_SOURCES)
 	cargo build --release --manifest-path Core/Cargo.toml
 
 dicts: $(CORE_LIB)
-	Core/target/release/build-dicts "$(RAW_TABLES_DIR)" Resources/Dicts
+	@if [ -n "$(FORMORDO_CORPUS_LM)" ]; then \
+	  Core/target/release/build-dicts "$(RAW_TABLES_DIR)" Resources/Dicts --corpus-lm "$(FORMORDO_CORPUS_LM)"; \
+	else \
+	  Core/target/release/build-dicts "$(RAW_TABLES_DIR)" Resources/Dicts; \
+	fi
 
 build/PrisWubi: $(APP_SOURCES) $(CORE_LIB) $(CORE_HEADER)
 	mkdir -p build

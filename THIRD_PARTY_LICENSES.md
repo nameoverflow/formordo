@@ -23,22 +23,22 @@
    - 协议：MIT License (`MIT`)，Copyright (c) 2016 mozillazg，协议原文见 `Resources/RawTables/pinyin/LICENSE`。
    - 原始数据整合自 [Unicode Unihan Database](https://www.unicode.org/reports/tr38/)（`kTGHZ2013` / `kMandarin` 等字段）及《通用规范汉字表》（2013 年版）。
 
-## 纠错语言模型统计语料来源（`wubi_aux.wbaux` `WBAUX002`）
+## 纠错语言模型语料来源（`wubi_aux.wbaux` `WBAUX003`）
 
-`Resources/Dicts/wubi_aux.wbaux` 中的字级 Unigram、Bigram PMI 与 Trigram 残差统计表（不包含任何原始语料原文，仅保留聚合频次/对数概率统计）由 `Scripts/prepare_corpus.py` 与 `Core/src/bin/train_lm.rs` 基于以下多域中文语料（40% 正式书面 / 30% 社区问答 / 30% 社交短评，另含 2.5% Rime 词表回退）训练并经 `build-dicts --corpus-lm` 编译生成：
+`Resources/Dicts/wubi_aux.wbaux`（`WBAUX003`）中的 `Micro-RWKV7-Small` 量化神经语言模型权重（`WBLM0001`，`INT8` 只读 `mmap`，2.52M 参数）与精简高 PMI N-gram 统计表（8,051 字 Unigram、80,000 条 Bigram、35,000 条 Trigram，不含任何原始语料原文）由 `Scripts/train_rwkv7.py` 基于 **2.80 亿字（279.76M 去重简体汉字）** 多域现代中文语料训练，并经 `build-dicts --corpus-lm` 编译生成：
 
-| 语料分组 | 上游数据集 | 采样规模（训练汉字） | 上游协议声明 | 分发/商用合规提示 |
+| 语料分组 | 上游数据集 | 采样规模（去重汉字） | 上游协议声明 | 分发/商用合规提示 |
 | --- | --- | --- | --- | --- |
-| 正式书面 (Formal) | [wikimedia/wikipedia (`20231101.zh`)](https://huggingface.co/datasets/wikimedia/wikipedia) | 20.00M（繁转简并过滤自动生成小条目） | `CC-BY-SA-4.0` & `GFDL` | 需署名；统计派生权重建议保留来源说明 |
-| 社区问答 (Community) | [KrisTHL181/zhihu-qa](https://huggingface.co/datasets/KrisTHL181/zhihu-qa)（筛 2025–2026） | 16.00M | `ODC-BY` | 需署名；原始抓取内容受平台条款约束 |
-| 社区问答 (Community) | [nlgandnlu/ZHIHU-16K](https://github.com/nlgandnlu/ZHIHU-16K) | 6.00M | 未显式声明（学术公开） | 仅建议研究/个人评估使用 |
-| 社交口语 (Social) | [Orphanage/Baidu_Tieba_KangYaBeiGuo](https://huggingface.co/datasets/Orphanage/Baidu_Tieba_KangYaBeiGuo) | 2.01M | 卡片标 `MIT` / README 标 `CC-BY-NC-4.0` | **含非商用限制**，公开发布商业版本前请核查或替换 |
-| 社交口语 (Social) | [FreshCrawl/rednote-xiaohongshu-notes](https://huggingface.co/datasets/FreshCrawl/rednote-xiaohongshu-notes) | 1.49M | `Research-only`（非商用研究） | **仅限非商用研究**，公开发布商业版本前需剥离或替换 |
-| 社交口语 (Social) | [xinjiexinjie/socialbots](https://github.com/xinjiexinjie/socialbots)（2025 小红书评论） | 0.38M | 未显式声明（学术公开） | 仅建议研究/个人评估使用 |
+| 日常社交对话 (Social) | [silver/lccc (`lccc_base_train`)](https://huggingface.co/datasets/silver/lccc) | 95.00M | `MIT` | 需保留署名声明 |
+| 日常社交评论 (Social) | [theblackcat102/bilibili_comments_sharegpt](https://huggingface.co/datasets/theblackcat102/bilibili_comments_sharegpt) | ~2.18M | 公开社区语料 | 原始评论受平台条款约束 |
+| 社交生活笔记 (Social) | [FreshCrawl/rednote-xiaohongshu-notes](https://huggingface.co/datasets/FreshCrawl/rednote-xiaohongshu-notes) | ~1.49M | `Research-only`（非商用研究） | **仅限非商用研究**，公开发布商业版本前需剥离重训 |
+| 现代社区问答 (Community) | [KrisTHL181/zhihu-qa](https://huggingface.co/datasets/KrisTHL181/zhihu-qa)（筛 2024.06–2026 分片 `86..93`） | 71.09M | `ODC-BY` | 需署名；原始抓取内容受平台条款约束 |
+| 现代正式文本 (Formal) | [opencsg/Fineweb-Edu-Chinese-V2.1 (`4_5`)](https://huggingface.co/datasets/opencsg/Fineweb-Edu-Chinese-V2.1) | 75.00M | `ODC-BY` | 需保留归属说明 |
+| 百科书面语 (Formal) | [wikimedia/wikipedia (`20231101.zh`)](https://huggingface.co/datasets/wikimedia/wikipedia) | 35.00M（繁转简并过滤自动生成小条目） | `CC-BY-SA-4.0` & `GFDL` | 需署名；统计/模型派生权重建议保留来源说明 |
 
 > 若需构建严格纯宽松协议的独立版 `wubi_aux.wbaux`（不引入任何外部社区/社交语料），可直接运行 `make dicts`（不传 `FORMORDO_CORPUS_LM`），退回仅由 `Resources/RawTables/` 生成的基础 Bigram 统计。
 
 ## 派生二进制产物与协议兼容性提示
 
 - `Resources/Dicts/wubi86.wbdict`、`wubi98.wbdict`、`wubi06.wbdict` 分别是对应原始码表的直接二进制索引编译产物，沿用各自原始码表的开源协议（`LGPL-3.0` / `GPL-3.0` / `Apache-2.0`）。
-- `Resources/Dicts/wubi_aux.wbaux`（`WBAUX002`）汇总了 `mozillazg/pinyin-data` 的拼音反查索引、三套五笔词表的回退统计，以及上述多域语料派生的 7,330 条 Unigram、260,000 条 Bigram PMI 与 150,000 条 Trigram 残差统计。分发 `Resources/Dicts/` 时需同时遵守 `GPL-3.0` / `LGPL-3.0` / `Apache-2.0` / `MIT` 条款，并留意上表所列社区/社交语料的非商用/研究用途限制（公开发布商业 App Store 版本前建议替换为明确可商用的授权语料重新执行 `train_lm` + `build-dicts --corpus-lm`）。
+- `Resources/Dicts/wubi_aux.wbaux`（`WBAUX003`）汇总了 `mozillazg/pinyin-data` 的拼音反查索引、三套五笔词表的回退统计，以及上述 2.80 亿字多域语料训练的 `Micro-RWKV7-Small`（`WBLM0001` `INT8` 权重，2.56 MB）与高 PMI N-gram 残差表（共 4.16 MB）。分发 `Resources/Dicts/` 时需同时遵守 `GPL-3.0` / `LGPL-3.0` / `Apache-2.0` / `MIT` / `ODC-BY` 条款，并留意上表所列少量社交语料的研究用途限制（公开发布商业 App Store 版本前建议移除 `rednote-xiaohongshu-notes` 后重新执行 `Scripts/train_rwkv7.py` + `FORMORDO_CORPUS_LM=... make dicts`）。
