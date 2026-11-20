@@ -56,7 +56,7 @@ public struct SettingsRootView: View {
                             .foregroundStyle(Color(red: 0.11, green: 0.12, blue: 0.15))
                     }
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("形序 Formordo")
+                        Text("句序 Juxu")
                             .font(.system(size: 13.5, weight: .semibold))
                         Text(bridge.state.schemaName)
                             .font(.system(size: 11))
@@ -162,73 +162,86 @@ public struct SettingsRootView: View {
                 }
             }
 
-            settingsCard {
-                VStack(spacing: 11) {
-                    toggleRow(
-                        title: "四码唯一自动上屏",
-                        subtitle: "输满四码且精确匹配唯一候选时免按空格直接上屏",
-                        isOn: binding(\.fourthCodeAutoCommit)
-                    )
-                    Divider()
-                    toggleRow(
-                        title: "第五码顶字上屏",
-                        subtitle: "四码存在重码时，继续敲第 5 码自动将首选词顶上屏并开始新编码",
-                        isOn: binding(\.fifthCodePushCommit)
-                    )
-                    Divider()
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("四码空码处理")
-                                .font(.system(size: 13, weight: .medium))
-                            Text("第四码无匹配且无高置信度纠错项时的行为")
-                                .font(.system(size: 11.5))
-                                .foregroundStyle(.secondary)
+            if bridge.prefs.schemaId != 20 {
+                settingsCard {
+                    VStack(spacing: 11) {
+                        toggleRow(
+                            title: "四码唯一自动上屏",
+                            subtitle: "输满四码且精确匹配唯一候选时免按空格直接上屏",
+                            isOn: binding(\.fourthCodeAutoCommit)
+                        )
+                        Divider()
+                        toggleRow(
+                            title: "第五码顶字上屏",
+                            subtitle: "四码存在重码时，继续敲第 5 码自动将首选词顶上屏并开始新编码",
+                            isOn: binding(\.fifthCodePushCommit)
+                        )
+                        Divider()
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("四码空码处理")
+                                    .font(.system(size: 13, weight: .medium))
+                                Text("第四码无匹配且无高置信度纠错项时的行为")
+                                    .font(.system(size: 11.5))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Picker("", selection: binding(\.fourthEmptyBehavior)) {
+                                Text("阻断第 4 码并提示").tag("block")
+                                Text("自动清空重输").tag("clear")
+                            }
+                            .labelsHidden()
+                            .frame(width: 168)
                         }
-                        Spacer()
-                        Picker("", selection: binding(\.fourthEmptyBehavior)) {
-                            Text("阻断第 4 码并提示").tag("block")
-                            Text("自动清空重输").tag("clear")
-                        }
-                        .labelsHidden()
-                        .frame(width: 168)
                     }
                 }
             }
 
             settingsCard {
                 VStack(spacing: 11) {
-                    toggleRow(
-                        title: "流式无空格连打（实验）",
-                        subtitle: "连续输入词组和简码。标点确认中文，回车输入原始字母",
-                        isOn: binding(\.spaceless)
-                    )
-                    Divider()
-                    toggleRow(
-                        title: "最短编码（简码）优先",
-                        subtitle: "输入 1–3 码时简码字词始终优先于长码前缀补全",
-                        isOn: binding(\.shortestCodeFirst)
-                    )
-                    Divider()
-                    toggleRow(
-                        title: "全码显示简码提示",
-                        subtitle: "打全码时在候选旁标注最短简码（如打 khk 在“中”旁轻提示 k）",
-                        isOn: binding(\.showShortcodeHint)
-                    )
-                    Divider()
-                    toggleRow(
-                        title: "出简不出全",
-                        subtitle: bridge.prefs.spaceless
-                            ? "优先按首选简码切分单字，较长的编码仍可出字"
-                            : "拥有首选简码的单字在输入四码全码时后置",
-                        isOn: binding(\.strictShortcode)
-                    )
-                    Divider()
-                    toggleRow(
-                        title: "z 键万能通配与拼音反查",
-                        subtitle: "第 2–4 位输 z 通配任意码元；首字母输 z 接拼音反查当前版本的五笔码",
-                        isOn: binding(\.zOmnipotent)
-                    )
-                    Divider()
+                    if bridge.prefs.schemaId == 20 {
+                        toggleRow(
+                            title: "声母简拼",
+                            subtitle: "支持首字母简拼与全简混拼（如 srf / shurf → 输入法）",
+                            isOn: binding(\.pinyinInitialAbbr)
+                        )
+                        Divider()
+                    } else {
+                        toggleRow(
+                            title: "流式无空格连打（实验）",
+                            subtitle: "连续输入词组和简码。标点确认中文，回车输入原始字母",
+                            isOn: binding(\.spaceless)
+                        )
+                        Divider()
+                        toggleRow(
+                            title: "最短编码（简码）优先",
+                            subtitle: "输入 1–3 码时简码字词始终优先于长码前缀补全",
+                            isOn: binding(\.shortestCodeFirst)
+                        )
+                        Divider()
+                        toggleRow(
+                            title: "全码显示简码提示",
+                            subtitle: "打全码时在候选旁标注最短简码（如打 khk 在“中”旁轻提示 k）",
+                            isOn: binding(\.showShortcodeHint)
+                        )
+                        Divider()
+                        toggleRow(
+                            title: "出简不出全",
+                            subtitle: bridge.prefs.spaceless
+                                ? "优先按首选简码切分单字，较长的编码仍可出字"
+                                : "拥有首选简码的单字在输入四码全码时后置",
+                            isOn: binding(\.strictShortcode)
+                        )
+                        if bridge.prefs.schemaId != 10 {
+                            Divider()
+                            toggleRow(
+                                title: "z 键万能通配与拼音反查",
+                                subtitle: "第 2–4 位输 z 通配任意码元；首字母输 z 接拼音反查当前版本的五笔码",
+                                isOn: binding(\.zOmnipotent)
+                            )
+                        }
+                        Divider()
+                    }
                     toggleRow(
                         title: "启用 Unicode 扩展区大字集",
                         subtitle: "包含 CJK 扩展 B–G 生僻古籍字（日常盲打建议关闭以保持四码唯一性）",
@@ -245,7 +258,7 @@ public struct SettingsRootView: View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader(
                 title: "统计置信度误触纠正与动态触控热区",
-                subtitle: "融合连续二维触点高斯似然、5.5 万条语料 Bigram 与个人输入历史，专为解决五笔滑偏痛点设计"
+                subtitle: "融合连续二维触点高斯似然、语料 N-gram、RWKV-7 与个人输入历史，专为解决打字滑偏与错键痛点设计"
             )
 
             settingsCard {
@@ -441,7 +454,7 @@ public struct SettingsRootView: View {
                         .font(.system(size: 13, weight: .medium))
 
                     HStack(spacing: 8) {
-                        TextField("输入 2–12 字中文词条，如：形序", text: $newPhraseInput)
+                        TextField("输入 2–12 字中文词条，如：句序", text: $newPhraseInput)
                             .textFieldStyle(.roundedBorder)
                         Button("添加词条") {
                             let code = bridge.addUserPhrase(newPhraseInput)
@@ -872,7 +885,7 @@ public final class SettingsWindowController {
                 backing: .buffered,
                 defer: false
             )
-            win.title = "形序偏好设置"
+            win.title = "句序偏好设置"
             win.toolbarStyle = .unified
             win.center()
             win.isReleasedWhenClosed = false

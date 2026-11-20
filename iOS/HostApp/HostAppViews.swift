@@ -152,7 +152,7 @@ public struct IOSHostRootView: View {
                             .frame(width: 38, height: 38)
                         }
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("形序 Formordo")
+                            Text("句序 Juxu")
                                 .font(.system(size: 20, weight: .bold))
                             Text("当前激活：\(bridge.state.schemaName) · 零拷贝 mmap 内核")
                                 .font(.system(size: 13))
@@ -166,7 +166,7 @@ public struct IOSHostRootView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("键盘实时试手区", systemImage: "character.cursor.ibeam")
                             .font(.system(size: 14, weight: .semibold))
-                        TextField("点此弹出键盘试打五笔、长按空格滑动移光标…", text: $sandboxText)
+                        TextField("点此弹出键盘试打汉字、长按空格滑动移光标…", text: $sandboxText)
                             .textFieldStyle(.roundedBorder)
                             .focused($sandboxFocused)
                     }
@@ -188,8 +188,8 @@ public struct IOSHostRootView: View {
                         }
 
                         stepLine(num: "1", text: "进入「设置 → 通用 → 键盘 → 键盘 → 添加新键盘」")
-                        stepLine(num: "2", text: "在第三方键盘中选择「形序」即可离线极速盲打")
-                        stepLine(num: "3", text: "如需候选栏剪贴板提示，开启「允许完全访问」并在「设置 → App → 形序 → 从其他 App 粘贴」设为「允许」")
+                        stepLine(num: "2", text: "在第三方键盘中选择「句序」即可离线极速盲打")
+                        stepLine(num: "3", text: "如需候选栏剪贴板提示，开启「允许完全访问」并在「设置 → App → 句序 → 从其他 App 粘贴」设为「允许」")
 
                         Button {
                             openSystemKeyboardSettings()
@@ -249,47 +249,56 @@ public struct IOSHostRootView: View {
                     .padding(14)
                     .background(iosCardBackground)
 
-                    VStack(spacing: 12) {
-                        iosToggleRow("四码唯一自动上屏", sub: "精确四码唯一匹配时直接上屏", isOn: binding(\.fourthCodeAutoCommit))
-                        Divider()
-                        iosToggleRow("第五码自动顶字", sub: "四码重码时敲第 5 码将首选词顶上屏", isOn: binding(\.fifthCodePushCommit))
-                        Divider()
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("四码空码行为")
-                                    .font(.system(size: 15))
-                                Text("无匹配且无高置信度纠错时的动作")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
+                    if bridge.prefs.schemaId != 20 {
+                        VStack(spacing: 12) {
+                            iosToggleRow("四码唯一自动上屏", sub: "精确四码唯一匹配时直接上屏", isOn: binding(\.fourthCodeAutoCommit))
+                            Divider()
+                            iosToggleRow("第五码自动顶字", sub: "四码重码时敲第 5 码将首选词顶上屏", isOn: binding(\.fifthCodePushCommit))
+                            Divider()
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("四码空码行为")
+                                        .font(.system(size: 15))
+                                    Text("无匹配且无高置信度纠错时的动作")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Picker("", selection: binding(\.fourthEmptyBehavior)) {
+                                    Text("阻断第4码").tag("block")
+                                    Text("清空重输").tag("clear")
+                                }
+                                .labelsHidden()
                             }
-                            Spacer()
-                            Picker("", selection: binding(\.fourthEmptyBehavior)) {
-                                Text("阻断第4码").tag("block")
-                                Text("清空重输").tag("clear")
-                            }
-                            .labelsHidden()
                         }
+                        .padding(14)
+                        .background(iosCardBackground)
                     }
-                    .padding(14)
-                    .background(iosCardBackground)
 
                     VStack(spacing: 12) {
-                        iosToggleRow("流式无空格连打（实验）", sub: "连续输入词组和简码。标点确认中文，回车输入原始字母", isOn: binding(\.spaceless))
-                        Divider()
-                        iosToggleRow("最短编码（简码）优先", sub: "1–3 码简码始终排在补全项之前", isOn: binding(\.shortestCodeFirst))
-                        Divider()
-                        iosToggleRow("全码显示 ⚡ 简码提示", sub: "打全码时提示更短简码", isOn: binding(\.showShortcodeHint))
-                        Divider()
-                        iosToggleRow(
-                            "出简不出全",
-                            sub: bridge.prefs.spaceless
-                                ? "优先按首选简码切分单字，较长的编码仍可出字"
-                                : "有首选简码的单字在四码全码时后置",
-                            isOn: binding(\.strictShortcode)
-                        )
-                        Divider()
-                        iosToggleRow("z 键通配与拼音反查", sub: "z 查码 + 输拼音反查五笔拆码", isOn: binding(\.zOmnipotent))
-                        Divider()
+                        if bridge.prefs.schemaId == 20 {
+                            iosToggleRow("声母简拼", sub: "支持首字母简拼及混拼（如 srf / shurf → 输入法）", isOn: binding(\.pinyinInitialAbbr))
+                            Divider()
+                        } else {
+                            iosToggleRow("流式无空格连打（实验）", sub: "连续输入词组和简码。标点确认中文，回车输入原始字母", isOn: binding(\.spaceless))
+                            Divider()
+                            iosToggleRow("最短编码（简码）优先", sub: "1–3 码简码始终排在补全项之前", isOn: binding(\.shortestCodeFirst))
+                            Divider()
+                            iosToggleRow("全码显示 ⚡ 简码提示", sub: "打全码时提示更短简码", isOn: binding(\.showShortcodeHint))
+                            Divider()
+                            iosToggleRow(
+                                "出简不出全",
+                                sub: bridge.prefs.spaceless
+                                    ? "优先按首选简码切分单字，较长的编码仍可出字"
+                                    : "有首选简码的单字在四码全码时后置",
+                                isOn: binding(\.strictShortcode)
+                            )
+                            if bridge.prefs.schemaId != 10 {
+                                Divider()
+                                iosToggleRow("z 键通配与拼音反查", sub: "z 查码 + 输拼音反查五笔拆码", isOn: binding(\.zOmnipotent))
+                            }
+                            Divider()
+                        }
                         iosToggleRow("中文标点与引号智能配对", sub: "自动转换全角标点并成对输入引号", isOn: binding(\.smartPunctuation))
                         Divider()
                         iosToggleRow("中英文之间自动加空格", sub: "中英混输、直输英文及剪贴板插入时自动补全空格", isOn: binding(\.autoSpaceZhEn))
@@ -381,7 +390,7 @@ public struct IOSHostRootView: View {
                             .font(.system(size: 14, weight: .semibold))
 
                         HStack(spacing: 8) {
-                            TextField("输入新词条，如：形序", text: $newWord)
+                            TextField("输入新词条，如：句序", text: $newWord)
                                 .textFieldStyle(.roundedBorder)
                             Button("添加") {
                                 let code = bridge.addUserPhrase(newWord)
@@ -566,7 +575,7 @@ public struct IOSTouchHitboxMapCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("26 键个人触控热区偏移图")
                         .font(.system(size: 14.5, weight: .semibold))
-                    Text("用形序键盘选词后自动采样。橙点表示已学习的触点中心，偏移会参与误触纠正。")
+                    Text("用句序键盘选词后自动采样。橙点表示已学习的触点中心，偏移会参与误触纠正。")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }

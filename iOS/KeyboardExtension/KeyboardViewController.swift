@@ -732,7 +732,7 @@ public final class KeyboardViewController: UIInputViewController {
     private func syncContextFromProxyIfIdle() {
         guard bridge.state.preedit.isEmpty else { return }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
-        bridge.setContext(String(before.suffix(16)))
+        bridge.setContext(String(before.suffix(32)))
     }
 
     private func currentIdlePredictions(for st: WubiActionState) -> [String]? {

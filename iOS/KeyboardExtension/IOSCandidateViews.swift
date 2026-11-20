@@ -264,7 +264,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
-        if !chevronBtn.isHidden && bounds.contains(point) && point.x >= chevronBtn.frame.minX - 8.0 {
+        if !chevronBtn.isHidden && bounds.contains(point) && point.x >= chevronBtn.frame.minX - 14.0 {
             return chevronBtn
         }
         if !clipboardPill.isHidden {
@@ -346,12 +346,12 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
             clipContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             clipTrailingToFull,
             candidatesTop,
-            clipContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
+            clipContainer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
 
             chevronBtn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
             chevronBtn.topAnchor.constraint(equalTo: topAnchor),
-            chevronBtn.bottomAnchor.constraint(equalTo: bottomAnchor),
-            chevronBtn.widthAnchor.constraint(equalToConstant: 46),
+            chevronBtn.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            chevronBtn.widthAnchor.constraint(equalToConstant: 52),
         ])
 
         ensureSlotCapacity(10)
@@ -367,7 +367,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     private var candidatesTop: NSLayoutConstraint!
 
     private var codeBandHeight: CGFloat {
-        bounds.height > 0 && bounds.height < 46 ? 18 : 23
+        bounds.height > 0 && bounds.height < 46 ? 16 : 20
     }
 
     @objc private func handleHorizontalPan(_ pan: UIPanGestureRecognizer) {

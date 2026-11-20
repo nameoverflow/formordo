@@ -905,6 +905,22 @@ impl WubiEngine {
                 .flatten();
             if learn {
                 self.learn_continuation(&commit_text, explicit, first_choice.as_deref());
+                let prev = self.last_committed.clone();
+                let _ = self.user.record_commit(
+                    &prev,
+                    &commit_text,
+                    timestamp_ms,
+                    false,
+                    2,
+                    None,
+                );
+                // Also record individual CJK characters of a committed word so subsequent single-char lookup (e.g. ju -> 橘 after 橘子) boosts them!
+                if commit_text.chars().count() >= 2 {
+                    for ch in commit_text.chars() {
+                        let s = ch.to_string();
+                        let _ = self.user.record_commit("", &s, timestamp_ms, false, 2, None);
+                    }
+                }
             }
             self.last_committed = commit_text.clone();
             let mut all_cjk = !commit_text.is_empty();

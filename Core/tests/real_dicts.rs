@@ -402,6 +402,52 @@ fn real_dicts_full_pinyin_and_xiaohe_sentence_and_typo() {
     println!("Pinyin touch typo j(o)ntiantianqi -> '{}'", typo_top);
     assert_eq!(typo_top, "今天天气");
 
+    // Verify `ju` has rich homophone candidates including `橘`, and committing `橘子` boosts `橘`
+    engine.clear_composition();
+    for ch in "ju".chars() {
+        let _ = engine.handle_key_event(0, Some(ch), false, 2300);
+    }
+    let ju_cands = engine.all_candidates();
+    println!("Pinyin 'ju' total candidates: {}, includes 橘: {}", ju_cands.len(), ju_cands.iter().any(|c| c.text == "橘"));
+    assert!(ju_cands.len() >= 25, "expected >=25 candidates for ju, got {}", ju_cands.len());
+    assert!(ju_cands.iter().any(|c| c.text == "橘"), "expected '橘' in ju candidates");
+
+    // Commit `橘子`, then type `ju` again and verify `橘` rises in rank!
+    engine.clear_composition();
+    for ch in "juzi".chars() {
+        let _ = engine.handle_key_event(0, Some(ch), false, 2400);
+    }
+    if let Some(idx) = engine.all_candidates().iter().position(|c| c.text == "橘子") {
+        let _ = engine.select_abs_candidate(idx, 2450);
+    }
+    for ch in "ju".chars() {
+        let _ = engine.handle_key_event(0, Some(ch), false, 2500);
+    }
+    let ju_pos_after = engine.all_candidates().iter().position(|c| c.text == "橘");
+    println!("Pinyin 'ju' position of '橘' after committing '橘子': {:?}", ju_pos_after);
+    assert!(ju_pos_after.is_some_and(|p| p < 12), "expected '橘' to rank in top 12 after 橘子, got {:?}", ju_pos_after);
+
+    // Verify jv->ju compatibility + corrected spelling comment + missing/extra letter correction
+    for (keys, expected_sub) in [
+        ("jv", "举"),
+        ("fanan", "方案"),
+        ("zhogwen", "中文"),
+        ("zhonngwen", "中文"),
+    ] {
+        engine.clear_composition();
+        for ch in keys.chars() {
+            let _ = engine.handle_key_event(0, Some(ch), false, 2600);
+        }
+        let top = &engine.page_candidates()[0];
+        println!("Pinyin spelling/typo '{}' -> '{}' (comment='{}')", keys, top.text, top.comment);
+        assert!(
+            engine.all_candidates().iter().any(|c| c.text.contains(expected_sub)),
+            "expected '{}' candidates to contain '{}'",
+            keys,
+            expected_sub
+        );
+    }
+
     // 2. Xiaohe YinXing real-dict lookup + 'z' typo rescue + spaceless sentence
     let mut cfg_xh = WubiConfig::default();
     cfg_xh.schema = WubiSchema::Xiaohe;

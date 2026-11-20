@@ -353,6 +353,11 @@ impl PinyinDictView {
     }
 
     #[inline]
+    pub fn syllable_count(&self) -> usize {
+        self.syl_count
+    }
+
+    #[inline]
     pub fn syllable_str(&self, syl_id: u16) -> &str {
         let idx = syl_id as usize;
         if idx >= self.syl_count {

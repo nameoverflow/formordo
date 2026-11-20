@@ -69,12 +69,16 @@ impl PinyinPath {
     }
 
     pub fn correction_hint(&self) -> String {
-        self.boundaries
-            .iter()
-            .filter(|b| b.correction != CorrectionKind::Exact)
-            .map(|b| b.syl_display.as_str())
-            .collect::<Vec<_>>()
-            .join("·")
+        let mut hints = Vec::new();
+        let mut start = 0usize;
+        for b in &self.boundaries {
+            let seg_text = self.text.get(start..b.text_bytes).unwrap_or("");
+            start = b.text_bytes;
+            if b.correction != CorrectionKind::Exact && !seg_text.is_empty() {
+                hints.push(format!("{}({})", seg_text, b.syl_display));
+            }
+        }
+        hints.join(" ")
     }
 }
 
@@ -125,7 +129,7 @@ fn build_lattice(
         // also allow edges starting before an apostrophe to end right after it.
         let _ = &mut effective_start;
 
-        let max_len = (n - start).min(MAX_SYL_LEN);
+        let max_len = (n - start).min(MAX_SYL_LEN + 1);
         for len in 1..=max_len {
             let end = start + len;
             if observations[start..end].iter().any(|o| o.ch == b'\'') {
@@ -135,8 +139,8 @@ fn build_lattice(
             let exact_str = String::from_utf8_lossy(&exact_bytes).into_owned();
 
             // Generate candidate strings for `start..end`
-            // (bytes_str, spatial_logp, correction_kind)
-            let mut hyps: Vec<(String, f32, CorrectionKind)> = Vec::new();
+            // (bytes_str, spatial_logp, correction_kind, extra_cost)
+            let mut hyps: Vec<(String, f32, CorrectionKind, f32)> = Vec::new();
             let exact_lp: f32 = (start..end)
                 .map(|i| {
                     per_pos_choices[i]
@@ -145,58 +149,133 @@ fn build_lattice(
                         .map_or(0.0, |c| c.1)
                 })
                 .sum();
-            hyps.push((exact_str.clone(), exact_lp, CorrectionKind::Exact));
+            if len <= MAX_SYL_LEN {
+                hyps.push((exact_str.clone(), exact_lp, CorrectionKind::Exact, 0.0));
+            }
+
+            // Compatible v->u normalization after j/q/x/y (e.g. jv->ju, jve->jue, jvan->juan, jvn->jun)
+            if (2..=4).contains(&len)
+                && matches!(exact_bytes[0], b'j' | b'q' | b'x' | b'y')
+                && exact_bytes[1] == b'v'
+            {
+                let mut norm = exact_bytes.clone();
+                norm[1] = b'u';
+                let norm_str = String::from_utf8_lossy(&norm).into_owned();
+                hyps.push((norm_str, exact_lp, CorrectionKind::TouchBoundary, -0.35));
+            }
 
             if decoder.config.typo.enabled {
-                // Single-position substitution
-                for pos in 0..len {
-                    let obs_idx = start + pos;
-                    for &(d, lp, is_exact, is_boundary) in &per_pos_choices[obs_idx] {
-                        if is_exact {
-                            continue;
+                if len <= MAX_SYL_LEN {
+                    // Single-position substitution
+                    for pos in 0..len {
+                        let obs_idx = start + pos;
+                        for &(d, lp, is_exact, is_boundary) in &per_pos_choices[obs_idx] {
+                            if is_exact {
+                                continue;
+                            }
+                            if len == 1 && !is_boundary {
+                                continue;
+                            }
+                            let mut b = exact_bytes.clone();
+                            b[pos] = b'a' + d - 1;
+                            let s = String::from_utf8_lossy(&b).into_owned();
+                            let other_lp: f32 = (start..end)
+                                .enumerate()
+                                .filter(|&(j, _)| j != pos)
+                                .map(|(_j, idx)| {
+                                    per_pos_choices[idx]
+                                        .iter()
+                                        .find(|c| c.2)
+                                        .map_or(0.0, |c| c.1)
+                                })
+                                .sum();
+                            let kind = if is_boundary {
+                                CorrectionKind::TouchBoundary
+                            } else {
+                                CorrectionKind::NeighborKey
+                            };
+                            hyps.push((s, other_lp + lp, kind, 0.0));
                         }
-                        if len == 1 && !is_boundary {
-                            continue;
+                    }
+                    // Adjacent transposition within syllable (`len >= 2`)
+                    if len >= 2 {
+                        for pos in 0..(len - 1) {
+                            if exact_bytes[pos] == exact_bytes[pos + 1] {
+                                continue;
+                            }
+                            let mut b = exact_bytes.clone();
+                            b.swap(pos, pos + 1);
+                            let s = String::from_utf8_lossy(&b).into_owned();
+                            let dt = observations[start + pos + 1]
+                                .timestamp_ms
+                                .saturating_sub(observations[start + pos].timestamp_ms);
+                            let trans_lp =
+                                if observations[start + pos + 1].timestamp_ms > 0 && dt <= 65 {
+                                    -2.45
+                                } else {
+                                    -3.45
+                                };
+                            hyps.push((s, trans_lp, CorrectionKind::Transposition, 0.0));
                         }
-                        let mut b = exact_bytes.clone();
-                        b[pos] = b'a' + d - 1;
-                        let s = String::from_utf8_lossy(&b).into_owned();
-                        let other_lp: f32 = (start..end)
-                            .enumerate()
-                            .filter(|&(j, _)| j != pos)
-                            .map(|(_j, idx)| {
-                                per_pos_choices[idx]
-                                    .iter()
-                                    .find(|c| c.2)
-                                    .map_or(0.0, |c| c.1)
-                            })
-                            .sum();
-                        let kind = if is_boundary {
-                            CorrectionKind::TouchBoundary
-                        } else {
-                            CorrectionKind::NeighborKey
-                        };
-                        hyps.push((s, other_lp + lp, kind));
                     }
                 }
-                // Adjacent transposition within syllable (`len >= 2`)
-                if len >= 2 {
-                    for pos in 0..(len - 1) {
-                        if exact_bytes[pos] == exact_bytes[pos + 1] {
-                            continue;
+
+                // Missing letter (omission):
+                // 1) Missing trailing 'g' in -ng finals (an->ang, en->eng, in->ing, ian->iang, uan->uang)
+                if (2..=5).contains(&len)
+                    && (exact_str.ends_with("an")
+                        || exact_str.ends_with("en")
+                        || exact_str.ends_with("in"))
+                {
+                    let mut with_g = exact_str.clone();
+                    with_g.push('g');
+                    if decoder.dict.lookup_syllable_id(&with_g).is_some() {
+                        hyps.push((with_g, exact_lp, CorrectionKind::NeighborKey, -2.5));
+                    }
+                }
+                // 2) Missing 1 letter anywhere inside a syllable (e.g. zhog->zhong, xio->xiao)
+                if (2..=5).contains(&len) && decoder.dict.lookup_syllable_id(&exact_str).is_none() {
+                    let target_len = len + 1;
+                    let first_ch = exact_bytes[0];
+                    for sid in 0..decoder.dict.syllable_count() {
+                        let cand = decoder.dict.syllable_str(sid as u16);
+                        let cb = cand.as_bytes();
+                        if cb.len() == target_len && cb[0] == first_ch {
+                            let mut i = 0usize;
+                            for &b in cb {
+                                if i < len && b == exact_bytes[i] {
+                                    i += 1;
+                                }
+                            }
+                            if i == len {
+                                hyps.push((
+                                    cand.to_owned(),
+                                    exact_lp,
+                                    CorrectionKind::NeighborKey,
+                                    -4.4,
+                                ));
+                            }
                         }
-                        let mut b = exact_bytes.clone();
-                        b.swap(pos, pos + 1);
+                    }
+                }
+
+                // Extra letter (insertion / fat-finger double-tap, e.g. zhonng->zhong, womren->women)
+                if (3..=7).contains(&len)
+                    && (len > MAX_SYL_LEN || decoder.dict.lookup_syllable_id(&exact_str).is_none())
+                {
+                    for drop_pos in 0..len {
+                        let mut b = Vec::with_capacity(len - 1);
+                        b.extend_from_slice(&exact_bytes[..drop_pos]);
+                        b.extend_from_slice(&exact_bytes[drop_pos + 1..]);
                         let s = String::from_utf8_lossy(&b).into_owned();
-                        let dt = observations[start + pos + 1]
-                            .timestamp_ms
-                            .saturating_sub(observations[start + pos].timestamp_ms);
-                        let trans_lp = if observations[start + pos + 1].timestamp_ms > 0 && dt <= 65 {
-                            -2.45
-                        } else {
-                            -3.45
-                        };
-                        hyps.push((s, trans_lp, CorrectionKind::Transposition));
+                        if decoder.dict.lookup_syllable_id(&s).is_some() {
+                            let is_repeat = (drop_pos > 0
+                                && exact_bytes[drop_pos] == exact_bytes[drop_pos - 1])
+                                || (drop_pos + 1 < len
+                                    && exact_bytes[drop_pos] == exact_bytes[drop_pos + 1]);
+                            let cost = if is_repeat { -3.2 } else { -4.4 };
+                            hyps.push((s, exact_lp, CorrectionKind::NeighborKey, cost));
+                        }
                     }
                 }
             }
@@ -208,12 +287,16 @@ fn build_lattice(
                 end
             };
 
-            for (s, spatial_logp, correction) in hyps {
-                let typo_cost = match correction {
-                    CorrectionKind::Exact => 0.0,
-                    CorrectionKind::TouchBoundary => -1.8,
-                    CorrectionKind::NeighborKey => -4.8,
-                    CorrectionKind::Transposition => -3.6,
+            for (s, spatial_logp, correction, extra_cost) in hyps {
+                let typo_cost = if extra_cost < 0.0 {
+                    extra_cost
+                } else {
+                    match correction {
+                        CorrectionKind::Exact => 0.0,
+                        CorrectionKind::TouchBoundary => -1.8,
+                        CorrectionKind::NeighborKey => -4.8,
+                        CorrectionKind::Transposition => -3.6,
+                    }
                 };
                 if let Some(sid) = decoder.dict.lookup_syllable_id(&s) {
                     edges_by_end[actual_end].push(LatticeEdge {
@@ -425,13 +508,19 @@ fn extend_pinyin_layer(
         if chain.len() == 1 {
             match &chain[0].syl {
                 SylMatch::Full(sid) => {
-                    for e in decoder
+                    for (rank, e) in decoder
                         .dict
                         .lookup_chars(*sid, decoder.config.enable_rare_charset)
                         .into_iter()
-                        .take(12)
+                        .take(60)
+                        .enumerate()
                     {
-                        entries.push((e.text.to_owned(), e.weight));
+                        if rank < 12
+                            || (decoder.config.dynamic_word_freq
+                                && decoder.user.unigram_boost(e.text) > 0.0)
+                        {
+                            entries.push((e.text.to_owned(), e.weight));
+                        }
                     }
                 }
                 SylMatch::Initial(init_id, is_digraph) => {
@@ -507,6 +596,9 @@ fn extend_pinyin_layer(
                 base_bias += 0.04 * aux.bigram_boost(first, sec);
             }
 
+            if decoder.config.dynamic_word_freq {
+                base_bias += 1.6 * decoder.user.unigram_boost(&text);
+            }
             for parent in parents {
                 let mut contextual_bias = base_bias;
                 if let Some(aux) = decoder.aux {
@@ -621,16 +713,15 @@ fn build_pinyin_candidates(
     let confs = softmax_confidences(&raw_scores);
     for (idx, path) in full_paths.iter().enumerate() {
         if seen.insert(path.text.clone()) {
+            if let Some(hint_comment) = (!path.correction_hint().is_empty()).then(|| path.correction_hint()) {
+                let _ = hint_comment;
+            }
             let hint = path.correction_hint();
             out.push(PinyinCandidate {
                 candidate: Candidate {
                     text: path.text.clone(),
                     matched_code: PackedCode::EMPTY,
-                    comment: if hint.is_empty() {
-                        String::new()
-                    } else {
-                        format!("纠:{}", hint)
-                    },
+                    comment: hint,
                     badge: if path.any_corrected {
                         CandidateBadge::TypoCorrected
                     } else {
@@ -646,22 +737,29 @@ fn build_pinyin_candidates(
     }
 
     // 2. Prefix word & single-char candidates at the start of the buffer (so user can select a prefix word)
-    let mut prefix_items: Vec<(String, usize, f32, bool)> = Vec::new();
+    let mut prefix_items: Vec<(String, usize, f32, bool, String)> = Vec::new();
     for end in (1..n).rev() {
         for edge in lattice[end].iter().filter(|e| e.start == 0).take(2) {
             match &edge.syl {
                 SylMatch::Full(sid) => {
+                    let syl_s = decoder.dict.syllable_str(*sid);
                     for e in decoder
                         .dict
                         .lookup_chars(*sid, decoder.config.enable_rare_charset)
                         .into_iter()
                         .take(4)
                     {
+                        let hint = if edge.correction != CorrectionKind::Exact {
+                            format!("{}({})", e.text, syl_s)
+                        } else {
+                            String::new()
+                        };
                         prefix_items.push((
                             e.text.to_owned(),
                             end,
                             ((e.weight as f32) + 1.0).ln() + edge.kind_cost,
                             edge.correction != CorrectionKind::Exact,
+                            hint,
                         ));
                     }
                 }
@@ -676,37 +774,49 @@ fn build_pinyin_candidates(
                     end,
                     path.score,
                     path.any_corrected,
+                    path.correction_hint(),
                 ));
             }
         }
     }
-    // Single-char candidates if `best_end == n` and we only had multi-char words
-    if let Some(first_edge) = lattice.iter().flatten().find(|e| e.start == 0) {
-        if let SylMatch::Full(sid) = first_edge.syl {
+    // Single-char candidates at position 0 (including up to 80 homophones so rare/daily chars like 橘 are always reachable!)
+    for edge in lattice.iter().flatten().filter(|e| e.start == 0).take(4) {
+        if let SylMatch::Full(sid) = edge.syl {
+            let syl_s = decoder.dict.syllable_str(sid);
             for e in decoder
                 .dict
                 .lookup_chars(sid, decoder.config.enable_rare_charset)
                 .into_iter()
-                .take(8)
+                .take(80)
             {
+                let mut sc = 0.25 * (((e.weight as f32) + 1.0).ln() - 15.0) + edge.kind_cost;
+                if decoder.config.dynamic_word_freq {
+                    sc += 1.2 * decoder.user.unigram_boost(e.text);
+                }
+                let hint = if edge.correction != CorrectionKind::Exact {
+                    format!("{}({})", e.text, syl_s)
+                } else {
+                    String::new()
+                };
                 prefix_items.push((
                     e.text.to_owned(),
-                    first_edge.end,
-                    ((e.weight as f32) + 1.0).ln(),
-                    false,
+                    edge.end,
+                    sc,
+                    edge.correction != CorrectionKind::Exact,
+                    hint,
                 ));
             }
         }
     }
 
     prefix_items.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-    for (text, consumed, _, corr) in prefix_items {
+    for (text, consumed, _, corr, hint) in prefix_items {
         if seen.insert(text.clone()) {
             out.push(PinyinCandidate {
                 candidate: Candidate {
                     text,
                     matched_code: PackedCode::EMPTY,
-                    comment: String::new(),
+                    comment: hint,
                     badge: if corr {
                         CandidateBadge::TypoCorrected
                     } else {
@@ -718,7 +828,7 @@ fn build_pinyin_candidates(
                 consumed_keys: consumed,
                 boundaries: Vec::new(),
             });
-            if out.len() >= 24 {
+            if out.len() >= 80 {
                 break;
             }
         }
