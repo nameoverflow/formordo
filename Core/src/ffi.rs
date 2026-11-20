@@ -68,6 +68,8 @@ fn serialize_action_and_state(engine: &WubiEngine, act: Option<&EngineOutput>) -
     json_escape(commit, &mut j);
     j.push_str(",\"preedit\":");
     json_escape(&engine.preedit(), &mut j);
+    j.push_str(",\"segmentedCode\":");
+    json_escape(&engine.segmented_code(), &mut j);
     j.push_str(",\"notice\":");
     json_escape(notice, &mut j);
 

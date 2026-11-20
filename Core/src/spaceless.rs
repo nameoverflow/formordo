@@ -42,11 +42,15 @@ impl Path {
         (self.boundaries[i] == boundary).then_some(i)
     }
 
-    pub fn segments(&self, count: usize) -> Vec<String> {
+    pub fn tail_start(&self) -> usize {
+        self.boundaries.iter().rev().nth(1).map_or(0, |b| b.keys)
+    }
+
+    pub fn segments(&self, keys: usize) -> Vec<String> {
         let mut start = 0;
         self.boundaries
             .iter()
-            .take(count)
+            .take_while(|boundary| boundary.keys <= keys)
             .map(|boundary| {
                 let text = self.text[start..boundary.text_bytes].to_owned();
                 start = boundary.text_bytes;
@@ -54,6 +58,25 @@ impl Path {
             })
             .collect()
     }
+
+    fn code_segments<'a>(&self, code: &'a str) -> Vec<&'a str> {
+        let mut start = 0;
+        let mut groups = Vec::new();
+        for boundary in self.boundaries.iter().take_while(|b| b.keys <= code.len()) {
+            groups.push(&code[start..boundary.keys]);
+            start = boundary.keys;
+        }
+        if start < code.len() {
+            groups.push(&code[start..]);
+        }
+        groups
+    }
+}
+
+pub(crate) struct StablePrefix {
+    pub keys: usize,
+    pub segments: Vec<String>,
+    pub codes: Vec<String>,
 }
 
 #[derive(Default)]
@@ -109,6 +132,17 @@ impl Stream {
         code.to_owned()
     }
 
+    pub fn segmented_code(&self, code: &str) -> String {
+        self.layers
+            .iter()
+            .rev()
+            .find_map(|layer| layer.first())
+            .map_or_else(
+                || code.to_owned(),
+                |best| best.code_segments(code).join("·"),
+            )
+    }
+
     /// Include hypotheses that end up to three strokes earlier, if their remaining strokes
     /// can still be the beginning of a longer code.
     pub fn take_stable_prefix(
@@ -117,13 +151,9 @@ impl Stream {
         dict: &DictView,
         user: &UserStore,
         include_rare: bool,
-    ) -> (usize, Vec<String>) {
-        let Some(limit) = code.len().checked_sub(COMMIT_DELAY) else {
-            return (0, Vec::new());
-        };
-        let Some(best) = self.paths().first() else {
-            return (0, Vec::new());
-        };
+    ) -> Option<StablePrefix> {
+        let limit = code.len().checked_sub(COMMIT_DELAY)?;
+        let best = self.paths().first()?;
         let mut cuts: Vec<Boundary> = best
             .boundaries
             .iter()
@@ -132,7 +162,7 @@ impl Stream {
             .collect();
         for tail_len in 0..MAX_CODE_LEN {
             if cuts.is_empty() {
-                return (0, Vec::new());
+                return None;
             }
             let end = code.len() - tail_len;
             if tail_len > 0
@@ -155,11 +185,14 @@ impl Stream {
                 }
             }
         }
-        let Some(boundary) = cuts.last().copied() else {
-            return (0, Vec::new());
-        };
+        let boundary = *cuts.last()?;
         let prefix = best.text[..boundary.text_bytes].to_owned();
-        let segments = best.segments(best.boundary_index(boundary).unwrap() + 1);
+        let segments = best.segments(boundary.keys);
+        let codes = best
+            .code_segments(&code[..boundary.keys])
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
         let score_base = best.score;
         while self.first < boundary.keys {
             self.layers.pop_front();
@@ -184,7 +217,11 @@ impl Stream {
                 true
             });
         }
-        (boundary.keys, segments)
+        Some(StablePrefix {
+            keys: boundary.keys,
+            segments,
+            codes,
+        })
     }
 
     fn extend(&self, decoder: &Decoder<'_>, code: &[u8]) -> Vec<Path> {

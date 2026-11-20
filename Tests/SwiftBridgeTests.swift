@@ -81,13 +81,28 @@ struct SwiftBridgeTests {
         committed += afterLast.commitText
         assert(committed == "今天天气真好我们一起")
         assert(afterLast.preedit == "去吃饭吧")
+        assert(afterLast.segmentedCode.hasSuffix("│ fcu·ktqn·kc"))
+        assert(afterLast.segmentedCode.filter(\.isLetter) == codes)
+        assert(afterLast.candidates.contains { $0.text == "吧" })
         assert(bridge.handleKey(keyCode: 0x33, scalar: 0, hasCmdOrCtrl: false, timestampMs: 502).preedit == beforeLast)
         _ = bridge.handleKey(keyCode: 0, scalar: last, hasCmdOrCtrl: false, timestampMs: 503)
         let punct = bridge.handleKey(keyCode: 0, scalar: 46, hasCmdOrCtrl: false, timestampMs: 504)
         assert(punct.commitText == "去吃饭吧。" && punct.preedit.isEmpty)
+        assert(punct.segmentedCode.isEmpty)
         _ = bridge.handleKey(keyCode: 0, scalar: 113, hasCmdOrCtrl: false, timestampMs: 505)
         let enter = bridge.handleKey(keyCode: 0x24, scalar: 13, hasCmdOrCtrl: false, timestampMs: 506)
         assert(enter.commitText == "我" && enter.preedit.isEmpty)
+        for key in "qbh".unicodeScalars {
+            _ = bridge.handleKey(keyCode: 0, scalar: key.value, hasCmdOrCtrl: false, timestampMs: 507)
+        }
+        let singleIndex = bridge.allCandidates(maxCount: 30).firstIndex { $0.text == "邜" }!
+        assert(bridge.selectAbsCandidate(absIndex: singleIndex, timestampMs: 508).commitText == "邜")
+        bridge.setContext("")
+        for key in codes.unicodeScalars {
+            _ = bridge.handleKey(keyCode: 0, scalar: key.value, hasCmdOrCtrl: false, timestampMs: 509)
+        }
+        let tailIndex = bridge.state.candidates.firstIndex { $0.text == "吧" }!
+        assert(bridge.selectCandidate(pageRelIndex: tailIndex, timestampMs: 510).commitText == "去吃饭吧")
 
         // 4b. Verify Chinese/English auto-spacing formatter & edge cases
         let allOn = AutoSpaceOptions(enabled: true, spaceDigits: true)

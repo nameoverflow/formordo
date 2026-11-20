@@ -5,7 +5,7 @@ use crate::neural::{NeuralContextTracker, NeuralView, RwkvState};
 use crate::spaceless::{Decoder, Stream};
 use crate::typo::{generate_hypotheses, softmax_confidences, CorrectionKind, KeyLayout, KeyObs};
 use crate::user_data::UserStore;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -120,6 +120,7 @@ pub struct WubiEngine {
     pub ascii_mode: bool,
     raw_code: String,
     stream: Stream,
+    committed_stream_codes: VecDeque<String>,
     observations: Vec<KeyObs>,
     candidates: Vec<Candidate>,
     page: usize,
@@ -157,6 +158,7 @@ impl WubiEngine {
             ascii_mode: false,
             raw_code: String::new(),
             stream: Stream::default(),
+            committed_stream_codes: VecDeque::new(),
             observations: Vec::new(),
             candidates: Vec::new(),
             page: 0,
@@ -732,6 +734,19 @@ impl WubiEngine {
         }
     }
 
+    pub fn segmented_code(&self) -> String {
+        if !self.uses_spaceless() || !self.is_composing() {
+            return String::new();
+        }
+        let pending = self.stream.segmented_code(&self.raw_code);
+        if self.committed_stream_codes.is_empty() {
+            pending
+        } else {
+            let committed: Vec<&str> = self.committed_stream_codes.iter().map(String::as_str).collect();
+            format!("{} │ {}", committed.join("·"), pending)
+        }
+    }
+
     fn uses_spaceless(&self) -> bool {
         self.config.spaceless
             && self.active_dict().is_some()
@@ -777,6 +792,7 @@ impl WubiEngine {
     pub fn clear_composition(&mut self) {
         self.raw_code.clear();
         self.stream = Stream::default();
+        self.committed_stream_codes.clear();
         self.observations.clear();
         self.candidates.clear();
         self.page = 0;
@@ -826,18 +842,28 @@ impl WubiEngine {
     pub fn select_abs_candidate(&mut self, abs_idx: usize, timestamp_ms: u64) -> Option<EngineOutput> {
         let cand = self.candidates.get(abs_idx)?.clone();
         let mut notice = String::new();
-        if self.uses_spaceless() {
-            let segments = self.stream.paths().get(abs_idx)?.segments(usize::MAX);
-            for segment in segments {
+        let commit_text = if self.uses_spaceless() && cand.matched_code.is_empty() {
+            let path = self.stream.paths().iter().find(|path| path.text == cand.text)?;
+            for segment in path.segments(self.raw_code.len()) {
                 self.finalize_commit(&segment, None, timestamp_ms, &mut notice);
             }
+            cand.text
+        } else if self.uses_spaceless() && cand.matched_code.len() < self.raw_code.len() {
+            let start = self.raw_code.len() - cand.matched_code.len();
+            let mut segments = self.stream.paths().first()?.segments(start);
+            segments.push(cand.text);
+            for segment in &segments {
+                self.finalize_commit(segment, None, timestamp_ms, &mut notice);
+            }
+            segments.concat()
         } else {
             self.finalize_commit(&cand.text, Some(cand.matched_code), timestamp_ms, &mut notice);
-        }
+            cand.text
+        };
         self.clear_composition();
         Some(EngineOutput {
             consumed: true,
-            commit_text: cand.text,
+            commit_text,
             preedit: String::new(),
             bell: false,
             notice,
@@ -1477,6 +1503,48 @@ impl WubiEngine {
                 is_exact: true,
             })
             .collect();
+        let Some(dict) = self.dicts[self.config.schema.slot_index()].as_ref() else {
+            return;
+        };
+        // Retain exact single-character choices independently of the sentence beam.
+        // For longer input, these replace only the last segment of the leading path.
+        let lookup_singles = |code| {
+            dict.lookup_exact(code, self.config.enable_rare_charset)
+                .into_iter()
+                .filter(|hit| hit.is_single_char() && hit.flags & ENTRY_FLAG_SYMBOL == 0)
+                .collect::<Vec<_>>()
+        };
+        let exact = PackedCode::from_ascii(&self.raw_code)
+            .map(|code| (code, lookup_singles(code)))
+            .filter(|(_, hits)| !hits.is_empty());
+        let Some((code, hits)) = exact.or_else(|| {
+            let start = paths.first()?.tail_start();
+            if start == 0 {
+                return None;
+            }
+            let code = PackedCode::from_ascii(&self.raw_code[start..])?;
+            Some((code, lookup_singles(code)))
+        }) else {
+            return;
+        };
+        let mut singles: Vec<_> = hits.into_iter()
+            .filter(|hit| self.candidates.first().is_none_or(|first| first.text != hit.text))
+            .map(|hit| Candidate {
+                text: hit.text.to_owned(),
+                matched_code: code,
+                comment: String::new(),
+                badge: CandidateBadge::None,
+                confidence: 0.0,
+                is_exact: true,
+            })
+            .collect();
+        let lead = usize::from(!self.candidates.is_empty());
+        let mut alternatives = self.candidates.split_off(lead);
+        alternatives.retain(|candidate| !singles.iter().any(|single| single.text == candidate.text));
+        let visible = singles.len().min(2);
+        self.candidates.extend(singles.drain(..visible));
+        self.candidates.extend(alternatives);
+        self.candidates.extend(singles);
     }
 
     fn push_spaceless(&mut self, obs: KeyObs) -> EngineOutput {
@@ -1485,7 +1553,7 @@ impl WubiEngine {
         self.page = 0;
         self.update_spaceless();
         let dict = self.dicts[self.config.schema.slot_index()].as_ref().unwrap();
-        let (cut, segments) = self.stream.take_stable_prefix(
+        let stable = self.stream.take_stable_prefix(
             &self.raw_code,
             dict,
             &self.user,
@@ -1495,10 +1563,14 @@ impl WubiEngine {
             consumed: true,
             ..Default::default()
         };
-        if cut > 0 {
-            self.raw_code.drain(..cut);
-            self.observations.drain(..cut);
-            for segment in segments {
+        if let Some(prefix) = stable {
+            self.raw_code.drain(..prefix.keys);
+            self.observations.drain(..prefix.keys);
+            self.committed_stream_codes.extend(prefix.codes);
+            while self.committed_stream_codes.len() > 32 {
+                self.committed_stream_codes.pop_front();
+            }
+            for segment in prefix.segments {
                 self.finalize_commit(&segment, None, obs.timestamp_ms, &mut out.notice);
                 out.commit_text.push_str(&segment);
             }

@@ -293,6 +293,9 @@ final class PrisWubiSimulatorUITests: XCTestCase {
             origin.withOffset(CGVector(dx: key.frame.midX, dy: key.frame.midY)).tap()
         }
         XCTAssertEqual(field.value as? String, target)
+        let segmented = typingApp.staticTexts["PrisWubiSegmentedCode"]
+        XCTAssertTrue(segmented.exists)
+        XCTAssertTrue(segmented.label.hasSuffix("│ fcu·ktqn·kc"))
         attachShot(name: "spaceless-98-composing")
         let enter = try XCTUnwrap(layout.keys.first { $0.kind == .returnKey })
         origin.withOffset(CGVector(dx: enter.frame.midX, dy: enter.frame.midY)).tap()

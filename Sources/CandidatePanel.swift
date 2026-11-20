@@ -11,6 +11,7 @@ public final class NativeCandidateContentView: NSView {
     public var state: WubiActionState = .empty {
         didSet {
             hoveredCandidateIndex = nil
+            toolTip = state.segmentedCode.isEmpty ? nil : state.segmentedCode
             invalidateIntrinsicContentSize()
             needsDisplay = true
         }
@@ -66,11 +67,12 @@ public final class NativeCandidateContentView: NSView {
     // MARK: - Exact Single-Line Layout Computation (Zero Line-Wrapping Guarantee)
 
     public func computeFittingSize() -> NSSize {
-        if state.vertical {
-            return computeVerticalLayout(apply: false)
-        } else {
-            return computeHorizontalLayout(apply: false)
+        var size = state.vertical ? computeVerticalLayout(apply: false) : computeHorizontalLayout(apply: false)
+        if !state.segmentedCode.isEmpty {
+            size.width = max(size.width, min(maxAllowedWidth, ceil(segmentedCodeText.size().width + 20)))
+            size.height += 18
         }
+        return size
     }
 
     public override var intrinsicContentSize: NSSize {
@@ -101,6 +103,16 @@ public final class NativeCandidateContentView: NSView {
         case .userPhrase, .none:
             return ""
         }
+    }
+
+    private var segmentedCodeText: NSAttributedString {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingHead
+        return NSAttributedString(string: state.segmentedCode, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular),
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: style,
+        ])
     }
 
     private func makeSingleLineTruncated(_ text: String, font: NSFont, color: NSColor, maxWidth: CGFloat) -> NSAttributedString {
@@ -369,7 +381,10 @@ public final class NativeCandidateContentView: NSView {
 
     public override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-
+        if !state.segmentedCode.isEmpty {
+            segmentedCodeText.draw(with: NSRect(x: 10, y: bounds.height - 17, width: bounds.width - 20, height: 15),
+                                   options: [.truncatesLastVisibleLine])
+        }
         for cell in cellLayouts {
             if cell.relIndex == 0 {
                 let path = NSBezierPath(roundedRect: cell.rect, xRadius: 5.0, yRadius: 5.0)

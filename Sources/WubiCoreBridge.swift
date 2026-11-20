@@ -82,6 +82,7 @@ public struct WubiActionState: Codable, Equatable, Sendable {
     public let schemaName: String
     public let commitText: String
     public let preedit: String
+    public let segmentedCode: String
     public let notice: String
     public let userPhraseCount: Int
     public let calibratedKeyCount: Int
@@ -100,6 +101,7 @@ public struct WubiActionState: Codable, Equatable, Sendable {
         schemaName: String,
         commitText: String,
         preedit: String,
+        segmentedCode: String = "",
         notice: String,
         userPhraseCount: Int,
         calibratedKeyCount: Int,
@@ -117,6 +119,7 @@ public struct WubiActionState: Codable, Equatable, Sendable {
         self.schemaName = schemaName
         self.commitText = commitText
         self.preedit = preedit
+        self.segmentedCode = segmentedCode
         self.notice = notice
         self.userPhraseCount = userPhraseCount
         self.calibratedKeyCount = calibratedKeyCount
@@ -127,7 +130,7 @@ public struct WubiActionState: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case consumed, bell, asciiMode, schemaId, page, totalPages, vertical
-        case schemaName, commitText, preedit, notice, userPhraseCount, calibratedKeyCount
+        case schemaName, commitText, preedit, segmentedCode, notice, userPhraseCount, calibratedKeyCount
         case validNextMask, nextKeyPriors, candidates
     }
 
@@ -143,6 +146,7 @@ public struct WubiActionState: Codable, Equatable, Sendable {
         self.schemaName = try c.decode(String.self, forKey: .schemaName)
         self.commitText = try c.decode(String.self, forKey: .commitText)
         self.preedit = try c.decode(String.self, forKey: .preedit)
+        self.segmentedCode = try c.decodeIfPresent(String.self, forKey: .segmentedCode) ?? ""
         self.notice = try c.decode(String.self, forKey: .notice)
         self.userPhraseCount = try c.decode(Int.self, forKey: .userPhraseCount)
         self.calibratedKeyCount = try c.decode(Int.self, forKey: .calibratedKeyCount)

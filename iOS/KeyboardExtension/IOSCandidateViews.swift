@@ -297,6 +297,15 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         contentTrack.backgroundColor = .clear
         clipContainer.addSubview(contentTrack)
 
+        codeClip.clipsToBounds = true
+        codeClip.isHidden = true
+        codeLabel.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        codeLabel.accessibilityIdentifier = "PrisWubiSegmentedCode"
+        codeClip.addSubview(codeLabel)
+        let codePan = UIPanGestureRecognizer(target: self, action: #selector(handleCodePan(_:)))
+        codePan.delegate = self
+        codeClip.addGestureRecognizer(codePan)
+
         edgeFadeMask.colors = [
             UIColor.black.cgColor,
             UIColor.black.cgColor,
@@ -327,21 +336,24 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         clipboardDismissBtn.addTarget(self, action: #selector(handleClipboardDismiss), for: .touchUpInside)
 
         addSubview(clipContainer)
+        addSubview(codeClip)
         addSubview(chevronBtn)
         addSubview(clipboardPill)
         addSubview(clipboardDismissBtn)
 
         clipTrailingToChevron = clipContainer.trailingAnchor.constraint(equalTo: chevronBtn.leadingAnchor)
         clipTrailingToFull = clipContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6)
+        candidatesTop = clipContainer.topAnchor.constraint(equalTo: topAnchor)
+        chevronTop = chevronBtn.topAnchor.constraint(equalTo: topAnchor)
 
         NSLayoutConstraint.activate([
             clipContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
             clipTrailingToFull,
-            clipContainer.topAnchor.constraint(equalTo: topAnchor),
+            candidatesTop,
             clipContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             chevronBtn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            chevronBtn.topAnchor.constraint(equalTo: topAnchor),
+            chevronTop,
             chevronBtn.bottomAnchor.constraint(equalTo: bottomAnchor),
             chevronBtn.widthAnchor.constraint(equalToConstant: 42),
         ])
@@ -351,9 +363,33 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
+        if pan.view === codeClip {
+            let velocity = pan.velocity(in: codeClip)
+            return maxCodeOffset > 0 && abs(velocity.x) > abs(velocity.y)
+        }
         guard contentWidth > clipContainer.bounds.width + 2.0 else { return false }
         let vel = pan.velocity(in: clipContainer)
         return abs(vel.x) > abs(vel.y) * 1.2
+    }
+
+    private let codeClip = UIView()
+    private let codeLabel = UILabel()
+    private var candidatesTop: NSLayoutConstraint!
+    private var chevronTop: NSLayoutConstraint!
+    private var codeOffset: CGFloat?
+    private var codePanStart: CGFloat = 0
+
+    private var maxCodeOffset: CGFloat {
+        max(0, codeLabel.intrinsicContentSize.width - codeClip.bounds.width)
+    }
+
+    @objc private func handleCodePan(_ pan: UIPanGestureRecognizer) {
+        if pan.state == .began {
+            codePanStart = codeOffset ?? maxCodeOffset
+        } else if pan.state == .changed {
+            codeOffset = min(maxCodeOffset, max(0, codePanStart - pan.translation(in: codeClip).x))
+            setNeedsLayout()
+        }
     }
 
     @objc private func handleHorizontalPan(_ pan: UIPanGestureRecognizer) {
@@ -394,8 +430,17 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        if !codeClip.isHidden {
+            codeClip.frame = CGRect(x: 10, y: 0, width: max(0, bounds.width - 20), height: 16)
+            codeLabel.frame = CGRect(
+                x: -min(codeOffset ?? maxCodeOffset, maxCodeOffset),
+                y: 0,
+                width: max(codeClip.bounds.width, codeLabel.intrinsicContentSize.width),
+                height: codeClip.bounds.height
+            )
+        }
         let barH = clipContainer.bounds.height
-        let slotH = min(34.0, max(28.0, barH - 10.0))
+        let slotH = codeClip.isHidden ? min(34.0, max(28.0, barH - 10.0)) : min(34.0, barH)
         let slotY = floor((barH - slotH) * 0.5)
 
         // Layout centered native clipboard pill when visible (keeping bottom >= 8pt clear for Row 0 q..p)
@@ -521,6 +566,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         let resolvedIdleWords = idleWords ?? Self.starterWords
         if lastPreeditEmpty == isEmpty,
            lastDark == dark,
+           codeLabel.text == state.segmentedCode,
            activeClipboardSuggestion == effectiveClipboard,
            (isEmpty ? lastIdleWords == resolvedIdleWords : lastCandidates == state.candidates) {
             return
@@ -533,6 +579,15 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
         let textCol: UIColor = dark ? .white : .black
         let subtleCol: UIColor = dark ? UIColor(white: 0.64, alpha: 1.0) : UIColor(white: 0.44, alpha: 1.0)
+        if codeLabel.text != state.segmentedCode {
+            codeLabel.text = state.segmentedCode
+            codeOffset = nil
+        }
+        codeLabel.textColor = subtleCol
+        codeClip.isHidden = state.segmentedCode.isEmpty
+        let codeHeight: CGFloat = codeClip.isHidden ? 0 : 16
+        candidatesTop.constant = codeHeight
+        chevronTop.constant = codeHeight
         chevronBtn.tintColor = textCol
         chevronBtn.isHidden = isEmpty
         clipTrailingToChevron.isActive = !isEmpty
