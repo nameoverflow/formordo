@@ -321,6 +321,8 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         clipContainer.addGestureRecognizer(pan)
 
         chevronBtn.translatesAutoresizingMaskIntoConstraints = false
+        chevronBtn.accessibilityIdentifier = "PrisWubiCandidateToggle"
+        chevronBtn.accessibilityLabel = "展开候选"
         let cfg = UIImage.SymbolConfiguration(pointSize: 15.5, weight: .medium)
         chevronBtn.setImage(UIImage(systemName: "chevron.down", withConfiguration: cfg), for: .normal)
         chevronBtn.addTarget(self, action: #selector(handleChevron), for: .touchUpInside)
@@ -548,6 +550,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
             UIImage(systemName: expanded ? "chevron.up" : "chevron.down", withConfiguration: cfg),
             for: .normal
         )
+        chevronBtn.accessibilityLabel = expanded ? "收起候选" : "展开候选"
     }
 
     private var lastCandidates: [WubiCandidateItem]?
@@ -686,7 +689,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     }
 }
 
-/// Full-keyboard 4-column scrollable Expanded Candidate Grid matching iOS 26 continuous squircle keycap aesthetic.
+/// Compact choices share a row. Longer candidates take the full width and wrap.
 final class IOSExpandedCandidateView: UIView {
     var onSelectAbsCandidate: ((Int) -> Void)?
     var onCollapse: (() -> Void)?
@@ -696,10 +699,17 @@ final class IOSExpandedCandidateView: UIView {
     private let scrollView = UIScrollView()
     private let gridStack = UIStackView()
     private let railStack = UIStackView()
+    private let candidateFont = UIFont.systemFont(ofSize: 17.5, weight: .regular)
+    private let columnSpacing: CGFloat = 6
+    private let textInset: CGFloat = 10
+    private var candidates: [WubiCandidateItem] = []
+    private var dark = false
+    private var renderedWidth: CGFloat = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.accessibilityIdentifier = "PrisWubiExpandedCandidates"
         scrollView.contentInsetAdjustmentBehavior = .never
         if #available(iOS 26.0, *) {
             scrollView.topEdgeEffect.isHidden = true
@@ -752,7 +762,9 @@ final class IOSExpandedCandidateView: UIView {
     }
 
     func reload(candidates: [WubiCandidateItem], dark: Bool) {
-        backgroundColor = .clear
+        self.candidates = candidates
+        self.dark = dark
+        renderedWidth = 0
         let cellBg = dark ? UIColor(white: 1.0, alpha: 0.175) : UIColor.white
         let textCol = dark ? UIColor.white : UIColor.black
 
@@ -762,37 +774,81 @@ final class IOSExpandedCandidateView: UIView {
             btn.setTitleColor(textCol, for: .normal)
             btn.layer.shadowOpacity = 0
         }
+        scrollView.setContentOffset(.zero, animated: false)
+        setNeedsLayout()
+    }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let width = scrollView.bounds.width
+        guard width > columnSpacing * 3, width != renderedWidth else { return }
+        renderedWidth = width
         gridStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let cols = 4
-        var idx = 0
-        while idx < candidates.count {
+        let columns = 4
+        let cellWidth = (width - CGFloat(columns - 1) * columnSpacing) / CGFloat(columns)
+        var compact: [UIView] = []
+        func flushCompactRow() {
+            guard !compact.isEmpty else { return }
             let row = UIStackView()
             row.axis = .horizontal
             row.distribution = .fillEqually
-            row.spacing = 6
-            for c in 0..<cols {
-                if idx + c < candidates.count {
-                    let item = candidates[idx + c]
-                    let absIdx = idx + c
-                    let btn = UIButton(type: .system)
-                    btn.backgroundColor = cellBg
-                    btn.layer.cornerRadius = IOSKeyboardLayoutEngine.keyCornerRadius
-                    btn.layer.cornerCurve = .continuous
-                    btn.layer.shadowOpacity = 0
-                    btn.setTitle(item.text, for: .normal)
-                    btn.setTitleColor(textCol, for: .normal)
-                    btn.titleLabel?.font = .systemFont(ofSize: 17.5, weight: .regular)
-                    btn.heightAnchor.constraint(equalToConstant: 45).isActive = true
-                    btn.addAction(UIAction { [weak self] _ in self?.onSelectAbsCandidate?(absIdx) }, for: .touchUpInside)
-                    row.addArrangedSubview(btn)
-                } else {
-                    row.addArrangedSubview(UIView())
-                }
+            row.spacing = columnSpacing
+            compact.forEach(row.addArrangedSubview)
+            for _ in compact.count..<columns {
+                row.addArrangedSubview(UIView())
             }
             gridStack.addArrangedSubview(row)
-            idx += cols
+            compact.removeAll(keepingCapacity: true)
         }
+        for (index, item) in candidates.enumerated() {
+            let textWidth = (item.text as NSString).size(withAttributes: [.font: candidateFont]).width
+            let fullWidth = textWidth > cellWidth - 2 * textInset || item.text.contains("\n")
+            let button = makeCandidateButton(
+                text: item.text, index: index, width: fullWidth ? width : cellWidth, fullWidth: fullWidth
+            )
+            if fullWidth {
+                flushCompactRow()
+                gridStack.addArrangedSubview(button)
+            } else {
+                compact.append(button)
+                if compact.count == columns {
+                    flushCompactRow()
+                }
+            }
+        }
+        flushCompactRow()
+    }
+
+    private func makeCandidateButton(text: String, index: Int, width: CGFloat, fullWidth: Bool) -> UIButton {
+        let button = UIButton(type: .system)
+        button.backgroundColor = dark ? UIColor(white: 1.0, alpha: 0.175) : .white
+        button.layer.cornerRadius = IOSKeyboardLayoutEngine.keyCornerRadius
+        button.layer.cornerCurve = .continuous
+        button.isAccessibilityElement = true
+        button.accessibilityLabel = text
+        button.accessibilityIdentifier = "PrisWubiExpandedCandidate\(index)"
+        button.addAction(UIAction { [weak self] _ in self?.onSelectAbsCandidate?(index) }, for: .touchUpInside)
+
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.text = text
+        label.textColor = dark ? .white : .black
+        label.font = candidateFont
+        label.textAlignment = fullWidth ? .natural : .center
+        label.lineBreakMode = .byCharWrapping
+        label.numberOfLines = 0
+        label.isAccessibilityElement = false
+        let availableWidth = max(1, width - 2 * textInset)
+        let textHeight = ceil(label.sizeThatFits(CGSize(width: availableWidth, height: .greatestFiniteMagnitude)).height)
+        button.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: textInset),
+            label.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -textInset),
+            label.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            label.heightAnchor.constraint(equalToConstant: textHeight),
+            button.heightAnchor.constraint(equalToConstant: max(45, textHeight + 16)),
+        ])
+        return button
     }
 
     private func makeRailButton(title: String?, symbol: String?, action: @escaping () -> Void) -> UIButton {

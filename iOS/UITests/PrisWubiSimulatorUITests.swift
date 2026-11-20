@@ -265,7 +265,7 @@ final class PrisWubiSimulatorUITests: XCTestCase {
     }
 
     @MainActor
-    func testSpaceless98Typing() throws {
+    private func openSpaceless98Keyboard() -> XCUIApplication {
         let app = XCUIApplication()
         app.launch()
         app.tabBars.buttons["输入设置"].tap()
@@ -281,7 +281,24 @@ final class PrisWubiSimulatorUITests: XCTestCase {
             XCTAssertEqual(toggle.value as? String, "1")
         }
         attachShot(name: "spaceless-98-settings")
-        let typingApp = openLiveKeyboard()
+        return openLiveKeyboard()
+    }
+
+    @MainActor
+    private func resetSpacelessTestPreferences() {
+        let app = XCUIApplication()
+        app.launch()
+        app.tabBars.buttons["输入设置"].tap()
+        for label in ["流式无空格连打（实验）", "出简不出全"] where app.switches[label].value as? String == "1" {
+            app.switches[label].tap()
+        }
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "86 版")).firstMatch.tap()
+    }
+
+    @MainActor
+    func testSpaceless98Typing() throws {
+        let typingApp = openSpaceless98Keyboard()
+        defer { resetSpacelessTestPreferences() }
         let field = typingApp.textFields.firstMatch
         let canvas = typingApp.otherElements["PrisWubiKeyCanvas"]
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
@@ -310,12 +327,50 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         XCTAssertEqual(field.value as? String, target + " hello")
         XCTAssertFalse(segmented.exists)
         attachShot(name: "spaceless-98-return-english")
-        app.launch()
-        app.tabBars.buttons["输入设置"].tap()
-        for label in ["流式无空格连打（实验）", "出简不出全"] where app.switches[label].value as? String == "1" {
-            app.switches[label].tap()
+    }
+
+    @MainActor
+    func testExpandedSentenceCandidatesWrapAndScroll() throws {
+        let app = openSpaceless98Keyboard()
+        defer { resetSpacelessTestPreferences() }
+        let canvas = app.otherElements["PrisWubiKeyCanvas"]
+        let expand = app.buttons["PrisWubiCandidateToggle"]
+        let candidates = app.scrollViews["PrisWubiExpandedCandidates"]
+        let first = app.buttons["PrisWubiExpandedCandidate0"]
+        func typeCodes(_ codes: String) throws {
+            XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+            let origin = canvas.coordinate(withNormalizedOffset: .zero)
+            let layout = IOSKeyboardLayoutEngine().computeLayout(in: canvas.frame.size)
+            for letter in codes.utf8 {
+                let key = try XCTUnwrap(layout.keys.first { $0.kind == .letter(letter) })
+                origin.withOffset(CGVector(dx: key.frame.midX, dy: key.frame.midY)).tap()
+            }
         }
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "86 版")).firstMatch.tap()
+
+        try typeCodes("rstaqkdrjfwh")
+        let keyboardWidth = canvas.frame.width
+        expand.tap()
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertEqual(first.label, "打长句的时候")
+        XCTAssertGreaterThan(first.frame.width, keyboardWidth * 0.75)
+        attachShot(name: "expanded-full-candidates")
+        app.buttons["重输"].tap()
+
+        try typeCodes("tvqqiepbdggtebjfddwpukwdedgxbtudcakftdgdcgwgdc")
+        expand.tap()
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertEqual(first.label, "常用字在五笔里其实只有三级简码或者三码全码")
+        XCTAssertGreaterThan(first.frame.height, 45)
+        attachShot(name: "expanded-wrapped-candidates")
+
+        let last = app.buttons["PrisWubiExpandedCandidate7"]
+        for _ in 0..<3 where !last.isHittable {
+            candidates.swipeUp()
+        }
+        XCTAssertTrue(last.isHittable)
+        let selected = last.label
+        last.tap()
+        XCTAssertEqual(app.textFields.firstMatch.value as? String, "很多" + selected)
     }
 
     @MainActor
