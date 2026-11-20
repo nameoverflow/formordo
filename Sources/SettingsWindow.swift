@@ -189,6 +189,12 @@ public struct SettingsRootView: View {
             settingsCard {
                 VStack(spacing: 11) {
                     toggleRow(
+                        title: "流式无空格连打（实验）",
+                        subtitle: "连续输入词组和简码，按标点或回车确认句尾",
+                        isOn: binding(\.spaceless)
+                    )
+                    Divider()
+                    toggleRow(
                         title: "最短编码（简码）优先",
                         subtitle: "输入 1–3 码时简码字词始终优先于长码前缀补全",
                         isOn: binding(\.shortestCodeFirst)
@@ -202,7 +208,9 @@ public struct SettingsRootView: View {
                     Divider()
                     toggleRow(
                         title: "出简不出全",
-                        subtitle: "拥有首选一/二/三级简码的单字在输入四码全码时后置，强化简码肌肉记忆",
+                        subtitle: bridge.prefs.spaceless
+                            ? "优先按首选简码切分单字，较长的编码仍可出字"
+                            : "拥有首选简码的单字在输入四码全码时后置",
                         isOn: binding(\.strictShortcode)
                     )
                     Divider()

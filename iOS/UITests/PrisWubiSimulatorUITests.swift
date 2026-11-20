@@ -265,6 +265,48 @@ final class PrisWubiSimulatorUITests: XCTestCase {
     }
 
     @MainActor
+    func testSpaceless98Typing() throws {
+        let app = XCUIApplication()
+        app.launch()
+        app.tabBars.buttons["输入设置"].tap()
+        let schema98 = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "98 版")).firstMatch
+        XCTAssertTrue(schema98.waitForExistence(timeout: 5))
+        schema98.tap()
+        for label in ["流式无空格连打（实验）", "出简不出全"] {
+            let toggle = app.switches[label]
+            XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+            if toggle.value as? String == "0" {
+                toggle.tap()
+            }
+            XCTAssertEqual(toggle.value as? String, "1")
+        }
+        attachShot(name: "spaceless-98-settings")
+        let typingApp = openLiveKeyboard()
+        let field = typingApp.textFields.firstMatch
+        let canvas = typingApp.otherElements["PrisWubiKeyCanvas"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        let origin = canvas.coordinate(withNormalizedOffset: .zero)
+        let layout = IOSKeyboardLayoutEngine().computeLayout(in: canvas.frame.size)
+        let target = "今天天气真好我们一起去吃饭吧"
+        for letter in "wygdgdrtfhvbtrwuggfhfcuktqnkc".utf8 {
+            let key = try XCTUnwrap(layout.keys.first { $0.kind == .letter(letter) })
+            origin.withOffset(CGVector(dx: key.frame.midX, dy: key.frame.midY)).tap()
+        }
+        XCTAssertEqual(field.value as? String, target)
+        attachShot(name: "spaceless-98-composing")
+        let enter = try XCTUnwrap(layout.keys.first { $0.kind == .returnKey })
+        origin.withOffset(CGVector(dx: enter.frame.midX, dy: enter.frame.midY)).tap()
+        XCTAssertEqual(field.value as? String, target)
+        attachShot(name: "spaceless-98-confirmed")
+        app.launch()
+        app.tabBars.buttons["输入设置"].tap()
+        for label in ["流式无空格连打（实验）", "出简不出全"] where app.switches[label].value as? String == "1" {
+            app.switches[label].tap()
+        }
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "86 版")).firstMatch.tap()
+    }
+
+    @MainActor
     func testFourthCodeInLetterGutter() throws {
         let app = openLiveKeyboard()
         let canvas = app.otherElements["PrisWubiKeyCanvas"]

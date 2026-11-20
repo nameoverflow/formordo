@@ -196,6 +196,7 @@ public struct WubiPreferences: Equatable, Sendable {
     public var fourthEmptyBehavior: String = "block"
     public var shortestCodeFirst: Bool = true
     public var strictShortcode: Bool = false
+    public var spaceless: Bool = false
     public var showShortcodeHint: Bool = true
     public var dynamicWordFreq: Bool = true
     public var dynamicCharFreq: Bool = false
@@ -241,6 +242,7 @@ public struct WubiPreferences: Equatable, Sendable {
         fourth_empty_behavior = "\(fourthEmptyBehavior)"
         shortest_code_first = \(shortestCodeFirst)
         strict_shortcode = \(strictShortcode)
+        spaceless = \(spaceless)
         show_shortcode_hint = \(showShortcodeHint)
         dynamic_word_freq = \(dynamicWordFreq)
         dynamic_char_freq = \(dynamicCharFreq)
@@ -308,6 +310,8 @@ public struct WubiPreferences: Equatable, Sendable {
                 p.shortestCodeFirst = boolVal
             case (_, "strict_shortcode"):
                 p.strictShortcode = boolVal
+            case (_, "spaceless"):
+                p.spaceless = boolVal
             case (_, "show_shortcode_hint"):
                 p.showShortcodeHint = boolVal
             case (_, "dynamic_word_freq"):

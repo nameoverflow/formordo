@@ -5,6 +5,7 @@ pub mod ffi;
 pub mod format;
 pub mod mmap_buf;
 pub mod neural;
+mod spaceless;
 pub mod typo;
 pub mod user_data;
 

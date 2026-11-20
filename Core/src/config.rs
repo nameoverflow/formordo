@@ -165,6 +165,8 @@ pub struct WubiConfig {
     pub shortest_code_first: bool,
     /// 出简不出全（有唯一简码的单字在输入全码时后置，培养简码肌肉记忆）
     pub strict_shortcode: bool,
+    /// 流式无空格连打（需要带语言模型的辅助词库）
+    pub spaceless: bool,
     /// 全码输入时提示存在更短简码（如 ⚡q）
     pub show_shortcode_hint: bool,
     /// 词组动态调频
@@ -206,6 +208,7 @@ impl Default for WubiConfig {
             fourth_empty_behavior: FourthEmptyBehavior::Block,
             shortest_code_first: true,
             strict_shortcode: false,
+            spaceless: false,
             show_shortcode_hint: true,
             dynamic_word_freq: true,
             dynamic_char_freq: false,
@@ -250,6 +253,7 @@ impl WubiConfig {
                 "fourth_empty_behavior = \"{}\"\n",
                 "shortest_code_first = {}\n",
                 "strict_shortcode = {}\n",
+                "spaceless = {}\n",
                 "show_shortcode_hint = {}\n",
                 "dynamic_word_freq = {}\n",
                 "dynamic_char_freq = {}\n",
@@ -278,6 +282,7 @@ impl WubiConfig {
             self.fourth_empty_behavior.as_tag(),
             self.shortest_code_first,
             self.strict_shortcode,
+            self.spaceless,
             self.show_shortcode_hint,
             self.dynamic_word_freq,
             self.dynamic_char_freq,
@@ -337,6 +342,7 @@ impl WubiConfig {
                 }
                 (_, "shortest_code_first") => cfg.shortest_code_first = parse_bool(val),
                 (_, "strict_shortcode") => cfg.strict_shortcode = parse_bool(val),
+                (_, "spaceless") => cfg.spaceless = parse_bool(val),
                 (_, "show_shortcode_hint") => cfg.show_shortcode_hint = parse_bool(val),
                 (_, "dynamic_word_freq") => cfg.dynamic_word_freq = parse_bool(val),
                 (_, "dynamic_char_freq") => cfg.dynamic_char_freq = parse_bool(val),

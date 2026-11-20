@@ -1,0 +1,331 @@
+use crate::code::PackedCode;
+use crate::config::WubiConfig;
+use crate::format::{AuxView, DictView};
+use crate::neural::{NeuralView, RwkvState};
+use crate::user_data::UserStore;
+use std::collections::VecDeque;
+
+const BEAM_WIDTH: usize = 8;
+const MAX_CODE_LEN: usize = 4;
+const RETAINED_LAYERS: usize = 8;
+const COMMIT_DELAY: usize = 8;
+const COMMIT_SCORE_MARGIN: f32 = 5.0;
+
+pub(crate) struct Decoder<'a> {
+    pub dict: &'a DictView,
+    pub aux: &'a AuxView,
+    pub model: NeuralView<'a>,
+    pub config: &'a WubiConfig,
+    pub user: &'a UserStore,
+    pub context: &'a [char],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Boundary {
+    keys: usize,
+    text_bytes: usize,
+}
+
+pub(crate) struct Path {
+    pub text: String,
+    pub score: f32,
+    boundaries: Vec<Boundary>,
+    state: RwkvState,
+}
+
+impl Path {
+    fn boundary_index(&self, boundary: Boundary) -> Option<usize> {
+        let i = self
+            .boundaries
+            .binary_search_by_key(&boundary.keys, |b| b.keys)
+            .ok()?;
+        (self.boundaries[i] == boundary).then_some(i)
+    }
+
+    pub fn segments(&self, count: usize) -> Vec<String> {
+        let mut start = 0;
+        self.boundaries
+            .iter()
+            .take(count)
+            .map(|boundary| {
+                let text = self.text[start..boundary.text_bytes].to_owned();
+                start = boundary.text_bytes;
+                text
+            })
+            .collect()
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct Stream {
+    layers: VecDeque<Vec<Path>>,
+    // Number of keys represented by the oldest retained layer, relative to the pending code.
+    first: usize,
+}
+
+impl Stream {
+    pub fn update(&mut self, code: &str, decoder: &Decoder<'_>, initial: &RwkvState) {
+        while !self.layers.is_empty() && self.first + self.layers.len() > code.len() + 1 {
+            self.layers.pop_back();
+        }
+        if self.layers.is_empty() || (self.first > 0 && self.layers.len() < MAX_CODE_LEN) {
+            self.first = 0;
+            self.layers.clear();
+            self.layers.push_back(vec![Path {
+                text: String::new(),
+                score: 0.0,
+                boundaries: Vec::new(),
+                state: initial.clone(),
+            }]);
+        }
+        for end in self.first + self.layers.len()..=code.len() {
+            let next = self.extend(decoder, &code.as_bytes()[..end]);
+            self.layers.push_back(next);
+            if self.layers.len() > RETAINED_LAYERS {
+                self.layers.pop_front();
+                self.first += 1;
+            }
+        }
+    }
+
+    fn layer(&self, pos: usize) -> &[Path] {
+        pos.checked_sub(self.first)
+            .and_then(|index| self.layers.get(index))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    pub fn paths(&self) -> &[Path] {
+        self.layers.back().map_or(&[], Vec::as_slice)
+    }
+
+    pub fn preview(&self, code: &str) -> String {
+        for (index, layer) in self.layers.iter().enumerate().rev() {
+            if let Some(best) = layer.first() {
+                let mut text = best.text.clone();
+                text.push_str(&code[self.first + index..]);
+                return text;
+            }
+        }
+        code.to_owned()
+    }
+
+    /// Include hypotheses that end up to three strokes earlier, if their remaining strokes
+    /// can still be the beginning of a longer code.
+    pub fn take_stable_prefix(
+        &mut self,
+        code: &str,
+        dict: &DictView,
+        user: &UserStore,
+        include_rare: bool,
+    ) -> (usize, Vec<String>) {
+        let Some(limit) = code.len().checked_sub(COMMIT_DELAY) else {
+            return (0, Vec::new());
+        };
+        let Some(best) = self.paths().first() else {
+            return (0, Vec::new());
+        };
+        let mut cuts: Vec<Boundary> = best
+            .boundaries
+            .iter()
+            .copied()
+            .take_while(|b| b.keys <= limit)
+            .collect();
+        for tail_len in 0..MAX_CODE_LEN {
+            if cuts.is_empty() {
+                return (0, Vec::new());
+            }
+            let end = code.len() - tail_len;
+            if tail_len > 0
+                && dict.valid_next_letters_mask(&code.as_bytes()[end..], include_rare) == 0
+                && user.valid_next_letters_mask(&code.as_bytes()[end..]) == 0
+            {
+                continue;
+            }
+            let layer = self.layer(end);
+            if let Some(leader) = layer.first() {
+                for path in layer
+                    .iter()
+                    .take_while(|p| p.score >= leader.score - COMMIT_SCORE_MARGIN)
+                {
+                    // Different word boundaries can still arrive at the same text and code cut.
+                    cuts.retain(|cut| {
+                        path.text.starts_with(&best.text[..cut.text_bytes])
+                            && path.boundary_index(*cut).is_some()
+                    });
+                }
+            }
+        }
+        let Some(boundary) = cuts.last().copied() else {
+            return (0, Vec::new());
+        };
+        let prefix = best.text[..boundary.text_bytes].to_owned();
+        let segments = best.segments(best.boundary_index(boundary).unwrap() + 1);
+        let score_base = best.score;
+        while self.first < boundary.keys {
+            self.layers.pop_front();
+            self.first += 1;
+        }
+        self.first -= boundary.keys;
+        for layer in &mut self.layers {
+            layer.retain_mut(|path| {
+                let Some(boundary_index) = path.boundary_index(boundary) else {
+                    return false;
+                };
+                if !path.text.starts_with(&prefix) {
+                    return false;
+                }
+                path.text.drain(..boundary.text_bytes);
+                path.boundaries.drain(..=boundary_index);
+                for b in &mut path.boundaries {
+                    b.keys -= boundary.keys;
+                    b.text_bytes -= boundary.text_bytes;
+                }
+                path.score -= score_base;
+                true
+            });
+        }
+        (boundary.keys, segments)
+    }
+
+    fn extend(&self, decoder: &Decoder<'_>, code: &[u8]) -> Vec<Path> {
+        struct Step<'a> {
+            parent: &'a Path,
+            text: &'a str,
+            estimate: f32,
+            bias: f32,
+        }
+
+        let mut steps = Vec::new();
+        let end = code.len();
+        for len in 1..=end.min(MAX_CODE_LEN) {
+            let parents = self.layer(end - len);
+            if parents.is_empty() {
+                continue;
+            }
+            let Some(key) = PackedCode::from_bytes(&code[end - len..]) else {
+                continue;
+            };
+            let hits = decoder
+                .dict
+                .lookup_exact(key, decoder.config.enable_rare_charset);
+            let users = decoder.user.lookup_exact(key);
+            let limit = [1, 2, 4, 6][len - 1];
+            let entries = hits
+                .iter()
+                .take(limit)
+                .enumerate()
+                .map(|(rank, entry)| (rank, entry.text, entry.weight, false))
+                .chain(
+                    users
+                        .into_iter()
+                        .take(4)
+                        .enumerate()
+                        .map(|(rank, (text, _, _))| (rank, text, 500, true)),
+                );
+            for (rank, text, weight, custom) in entries {
+                let mut chars = text.chars();
+                let Some(first) = chars.next() else { continue };
+                let second = chars.next();
+                let n_chars = 1 + usize::from(second.is_some()) + chars.count();
+                let mut bias = n_chars as f32 * 0.3 - 0.2;
+                if decoder.config.strict_shortcode && n_chars == 1 {
+                    if let Some(meta) = decoder.dict.char_meta(first) {
+                        let short_len = meta.primary_short_code.len();
+                        if short_len > 0 && short_len < len {
+                            // Keep longer codes available, but prefer the user's normal short-code path.
+                            bias -= 2.5 + 0.5 * (len - short_len - 1) as f32;
+                        }
+                    }
+                }
+                bias -= if len <= 2 {
+                    1.6 * rank as f32
+                } else {
+                    0.8 * (rank as f32).ln_1p()
+                };
+                bias -= if weight < 50 {
+                    2.5
+                } else if weight < 500 {
+                    0.8
+                } else {
+                    0.0
+                };
+                bias -= 6.0
+                    * text
+                        .chars()
+                        .filter(|&c| decoder.model.char_to_token(c) <= 1)
+                        .count() as f32;
+                if let Some(second) = second {
+                    bias += 0.0375 * decoder.aux.bigram_boost(first, second);
+                    if len == MAX_CODE_LEN && rank == 0 {
+                        bias += 0.45;
+                    }
+                }
+                if custom {
+                    bias += 2.5;
+                }
+                for parent in parents {
+                    let mut preceding = parent
+                        .text
+                        .chars()
+                        .rev()
+                        .chain(decoder.context.iter().rev().copied());
+                    let mut contextual_bias = bias;
+                    if let Some(prev) = preceding.next() {
+                        contextual_bias += 0.15 * decoder.aux.bigram_boost(prev, first);
+                        if let Some(prev2) = preceding.next() {
+                            contextual_bias += 0.15 * decoder.aux.trigram_boost(prev2, prev, first);
+                        }
+                    }
+                    let estimate = if n_chars == 1 {
+                        decoder.model.score_next_char(&parent.state, first)
+                    } else {
+                        decoder.model.score_phrase_fast(&parent.state, text)
+                            * (n_chars.min(MAX_CODE_LEN) as f32).powf(0.65)
+                    };
+                    steps.push(Step {
+                        parent,
+                        text,
+                        estimate: parent.score + contextual_bias + estimate,
+                        bias: contextual_bias,
+                    });
+                }
+            }
+        }
+        steps.sort_unstable_by(|a, b| b.estimate.total_cmp(&a.estimate));
+
+        let mut paths: Vec<Path> = Vec::with_capacity(BEAM_WIDTH * 2);
+        for step in steps.into_iter().take(BEAM_WIDTH * 2) {
+            let mut state = step.parent.state.clone();
+            let mut score = step.parent.score + step.bias;
+            for ch in step.text.chars() {
+                score += decoder.model.score_next_char(&state, ch);
+                decoder
+                    .model
+                    .step_token(decoder.model.char_to_token(ch), &mut state);
+            }
+            let mut text = step.parent.text.clone();
+            text.push_str(step.text);
+            let mut boundaries = step.parent.boundaries.clone();
+            boundaries.push(Boundary {
+                keys: end,
+                text_bytes: text.len(),
+            });
+            let path = Path {
+                text,
+                score,
+                boundaries,
+                state,
+            };
+            if let Some(existing) = paths.iter_mut().find(|p| p.text == path.text) {
+                if path.score > existing.score {
+                    *existing = path;
+                }
+            } else {
+                paths.push(path);
+            }
+        }
+        paths.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
+        paths.truncate(BEAM_WIDTH);
+        paths
+    }
+}

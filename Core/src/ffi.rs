@@ -67,7 +67,7 @@ fn serialize_action_and_state(engine: &WubiEngine, act: Option<&EngineOutput>) -
     j.push_str(",\"commitText\":");
     json_escape(commit, &mut j);
     j.push_str(",\"preedit\":");
-    json_escape(engine.raw_code(), &mut j);
+    json_escape(&engine.preedit(), &mut j);
     j.push_str(",\"notice\":");
     json_escape(notice, &mut j);
 

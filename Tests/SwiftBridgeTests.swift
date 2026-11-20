@@ -48,14 +48,46 @@ struct SwiftBridgeTests {
         var prefs = bridge.prefs
         assert(prefs.autoSpaceZhEn == true)
         assert(prefs.autoSpaceDigits == true)
+        assert(prefs.spaceless == false)
         prefs.strictShortcode = true
+        prefs.spaceless = true
         prefs.promoteThreshold = 0.86
         prefs.autoSpaceDigits = false
         let decoded = WubiPreferences.fromTOML(prefs.toTOML())
         assert(decoded.strictShortcode == true)
+        assert(decoded.spaceless == true)
         assert(abs(decoded.promoteThreshold - 0.86) < 0.005)
         assert(decoded.autoSpaceZhEn == true)
         assert(decoded.autoSpaceDigits == false)
+
+        // No-space 98 input through both ABI entry points. Backspace must edit a stroke
+        // in the marked tail even after the engine has committed part of the sentence.
+        var streamingPrefs = decoded
+        streamingPrefs.schemaId = 98
+        bridge.applyAndSavePreferences(streamingPrefs, persist: false)
+        bridge.setContext("")
+        let codes = "wygdgdrtfhvbtrwuggfhfcuktqnkc"
+        var committed = ""
+        for key in codes.utf8.dropLast() {
+            let state = bridge.pushTouch(
+                reportedAscii: key, x: 0, y: 0, isNormalized: false, timestampMs: 500
+            )
+            assert(state.consumed && !state.bell)
+            committed += state.commitText
+        }
+        let beforeLast = bridge.state.preedit
+        let last = UInt32(codes.utf8.last!)
+        let afterLast = bridge.handleKey(keyCode: 0, scalar: last, hasCmdOrCtrl: false, timestampMs: 501)
+        committed += afterLast.commitText
+        assert(committed == "今天天气真好我们一起")
+        assert(afterLast.preedit == "去吃饭吧")
+        assert(bridge.handleKey(keyCode: 0x33, scalar: 0, hasCmdOrCtrl: false, timestampMs: 502).preedit == beforeLast)
+        _ = bridge.handleKey(keyCode: 0, scalar: last, hasCmdOrCtrl: false, timestampMs: 503)
+        let punct = bridge.handleKey(keyCode: 0, scalar: 46, hasCmdOrCtrl: false, timestampMs: 504)
+        assert(punct.commitText == "去吃饭吧。" && punct.preedit.isEmpty)
+        _ = bridge.handleKey(keyCode: 0, scalar: 113, hasCmdOrCtrl: false, timestampMs: 505)
+        let enter = bridge.handleKey(keyCode: 0x24, scalar: 13, hasCmdOrCtrl: false, timestampMs: 506)
+        assert(enter.commitText == "我" && enter.preedit.isEmpty)
 
         // 4b. Verify Chinese/English auto-spacing formatter & edge cases
         let allOn = AutoSpaceOptions(enabled: true, spaceDigits: true)

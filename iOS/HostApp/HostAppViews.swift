@@ -268,11 +268,19 @@ public struct IOSHostRootView: View {
                     .background(iosCardBackground)
 
                     VStack(spacing: 12) {
+                        iosToggleRow("流式无空格连打（实验）", sub: "连续输入词组和简码，按标点或回车确认句尾", isOn: binding(\.spaceless))
+                        Divider()
                         iosToggleRow("最短编码（简码）优先", sub: "1–3 码简码始终排在补全项之前", isOn: binding(\.shortestCodeFirst))
                         Divider()
                         iosToggleRow("全码显示 ⚡ 简码提示", sub: "打全码时提示更短简码", isOn: binding(\.showShortcodeHint))
                         Divider()
-                        iosToggleRow("出简不出全", sub: "有首选简码的单字在四码全码时后置", isOn: binding(\.strictShortcode))
+                        iosToggleRow(
+                            "出简不出全",
+                            sub: bridge.prefs.spaceless
+                                ? "优先按首选简码切分单字，较长的编码仍可出字"
+                                : "有首选简码的单字在四码全码时后置",
+                            isOn: binding(\.strictShortcode)
+                        )
                         Divider()
                         iosToggleRow("z 键通配与拼音反查", sub: "z 查码 + 输拼音反查五笔拆码", isOn: binding(\.zOmnipotent))
                         Divider()

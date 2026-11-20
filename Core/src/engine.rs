@@ -2,6 +2,7 @@ use crate::code::{expand_wildcards, PackedCode};
 use crate::config::{FourthEmptyBehavior, ShiftToggleMode, WubiConfig, WubiSchema};
 use crate::format::{AuxView, DictView, ENTRY_FLAG_SYMBOL};
 use crate::neural::{NeuralContextTracker, NeuralView, RwkvState};
+use crate::spaceless::{Decoder, Stream};
 use crate::typo::{generate_hypotheses, softmax_confidences, CorrectionKind, KeyLayout, KeyObs};
 use crate::user_data::UserStore;
 use std::collections::{HashMap, HashSet};
@@ -118,6 +119,7 @@ pub struct WubiEngine {
 
     pub ascii_mode: bool,
     raw_code: String,
+    stream: Stream,
     observations: Vec<KeyObs>,
     candidates: Vec<Candidate>,
     page: usize,
@@ -154,6 +156,7 @@ impl WubiEngine {
             neural_tracker: NeuralContextTracker::default(),
             ascii_mode: false,
             raw_code: String::new(),
+            stream: Stream::default(),
             observations: Vec::new(),
             candidates: Vec::new(),
             page: 0,
@@ -191,6 +194,9 @@ impl WubiEngine {
             self.recent_context.drain(..drain_n);
         }
         self.last_committed = self.recent_context.iter().collect();
+        if self.is_composing() && self.uses_spaceless() {
+            self.rebuild_candidates();
+        }
     }
 
     /// Incrementally append committed CJK text to rolling context (O(len(text)) instead of O(sentence)).
@@ -687,6 +693,7 @@ impl WubiEngine {
 
     pub fn set_config(&mut self, new_config: WubiConfig) {
         let schema_changed = self.config.schema != new_config.schema;
+        let mode_changed = self.config.spaceless != new_config.spaceless;
         self.config = new_config;
         if schema_changed {
             let slot = self.config.schema.slot_index();
@@ -694,7 +701,9 @@ impl WubiEngine {
                 self.user.reindex_phrases(d);
             }
         }
-        if !self.raw_code.is_empty() {
+        if mode_changed {
+            self.clear_composition();
+        } else if !self.raw_code.is_empty() {
             self.rebuild_candidates();
         }
     }
@@ -713,6 +722,21 @@ impl WubiEngine {
     #[inline]
     pub fn raw_code(&self) -> &str {
         &self.raw_code
+    }
+
+    pub fn preedit(&self) -> String {
+        if self.uses_spaceless() {
+            self.stream.preview(&self.raw_code)
+        } else {
+            self.raw_code.clone()
+        }
+    }
+
+    fn uses_spaceless(&self) -> bool {
+        self.config.spaceless
+            && self.active_dict().is_some()
+            && self.aux.as_ref().is_some_and(AuxView::has_neural)
+            && !(self.config.z_omnipotent && self.raw_code.starts_with('z'))
     }
 
     #[inline]
@@ -752,6 +776,7 @@ impl WubiEngine {
 
     pub fn clear_composition(&mut self) {
         self.raw_code.clear();
+        self.stream = Stream::default();
         self.observations.clear();
         self.candidates.clear();
         self.page = 0;
@@ -801,7 +826,14 @@ impl WubiEngine {
     pub fn select_abs_candidate(&mut self, abs_idx: usize, timestamp_ms: u64) -> Option<EngineOutput> {
         let cand = self.candidates.get(abs_idx)?.clone();
         let mut notice = String::new();
-        self.finalize_commit(&cand.text, Some(cand.matched_code), timestamp_ms, &mut notice);
+        if self.uses_spaceless() {
+            let segments = self.stream.paths().get(abs_idx)?.segments(usize::MAX);
+            for segment in segments {
+                self.finalize_commit(&segment, None, timestamp_ms, &mut notice);
+            }
+        } else {
+            self.finalize_commit(&cand.text, Some(cand.matched_code), timestamp_ms, &mut notice);
+        }
         self.clear_composition();
         Some(EngineOutput {
             consumed: true,
@@ -834,7 +866,7 @@ impl WubiEngine {
     /// Used by iOS touch hit-testing to dynamically expand valid next-key boundaries.
     pub fn valid_next_mask(&self) -> u32 {
         const ALL_26: u32 = 0x03FF_FFFF;
-        if self.ascii_mode {
+        if self.ascii_mode || self.uses_spaceless() {
             return ALL_26;
         }
         let bytes = self.raw_code.as_bytes();
@@ -860,7 +892,7 @@ impl WubiEngine {
     /// Powers Key #1 predictive gutter bias AND Keys #2..#4 valid-vs-valid gutter disambiguation!
     pub fn next_key_priors(&self) -> [u8; 26] {
         let mut out = [100u8; 26];
-        if self.ascii_mode || !self.config.typo.enabled {
+        if self.ascii_mode || !self.config.typo.enabled || self.uses_spaceless() {
             return out;
         }
         let bytes = self.raw_code.as_bytes();
@@ -1023,13 +1055,16 @@ impl WubiEngine {
                 self.observations.pop();
                 self.page = 0;
                 if self.raw_code.is_empty() {
-                    self.candidates.clear();
+                    self.clear_composition();
+                } else if self.uses_spaceless() {
+                    self.update_spaceless();
+                    self.show_spaceless_candidates();
                 } else {
                     self.rebuild_candidates();
                 }
                 return EngineOutput {
                     consumed: true,
-                    preedit: self.raw_code.clone(),
+                    preedit: self.preedit(),
                     ..Default::default()
                 };
             }
@@ -1048,6 +1083,12 @@ impl WubiEngine {
                     self.user.break_single_burst();
                     self.clear_context();
                     return EngineOutput::default();
+                }
+                if self.uses_spaceless() {
+                    let out = self.finish_spaceless(timestamp_ms);
+                    self.user.break_single_burst();
+                    self.clear_context();
+                    return out;
                 }
                 let raw = self.raw_code.clone();
                 self.clear_composition();
@@ -1068,6 +1109,9 @@ impl WubiEngine {
                 if let Some(out) = self.select_page_candidate(0, timestamp_ms) {
                     return out;
                 }
+                if self.uses_spaceless() {
+                    return self.finish_spaceless(timestamp_ms);
+                }
                 // Empty code on Space: clear or bell
                 let bell = true;
                 if self.config.fourth_empty_behavior == FourthEmptyBehavior::Clear {
@@ -1085,7 +1129,7 @@ impl WubiEngine {
                     self.page_prev();
                     return EngineOutput {
                         consumed: true,
-                        preedit: self.raw_code.clone(),
+                        preedit: self.preedit(),
                         ..Default::default()
                     };
                 }
@@ -1096,7 +1140,7 @@ impl WubiEngine {
                     self.page_next();
                     return EngineOutput {
                         consumed: true,
-                        preedit: self.raw_code.clone(),
+                        preedit: self.preedit(),
                         ..Default::default()
                     };
                 }
@@ -1122,22 +1166,20 @@ impl WubiEngine {
                 self.clear_context();
                 return EngineOutput::default();
             }
-            let mut committed = String::new();
-            let mut notice = String::new();
-            if let Some(first) = self.candidates.first().cloned() {
-                self.finalize_commit(&first.text, Some(first.matched_code), timestamp_ms, &mut notice);
-                committed.push_str(&first.text);
-            }
-            self.clear_composition();
+            let mut out = if self.uses_spaceless() {
+                self.finish_spaceless(timestamp_ms)
+            } else {
+                self.select_abs_candidate(0, timestamp_ms)
+                    .unwrap_or_else(|| {
+                        self.clear_composition();
+                        EngineOutput::default()
+                    })
+            };
             self.user.break_single_burst();
             self.clear_context();
-            committed.push(c);
-            return EngineOutput {
-                consumed: true,
-                commit_text: committed,
-                notice,
-                ..Default::default()
-            };
+            out.consumed = true;
+            out.commit_text.push(c);
+            return out;
         }
 
         // While composing: digits 1..=9, paging `-`/`=`/`[`/`]`, quick `;`/`'` select
@@ -1151,12 +1193,12 @@ impl WubiEngine {
                 }
                 return EngineOutput {
                     consumed: true,
-                    preedit: self.raw_code.clone(),
+                    preedit: self.preedit(),
                     bell: true,
                     ..Default::default()
                 };
             }
-            if c == '-' || c == '[' {
+            if (c == '-' || c == '[') && !self.uses_spaceless() {
                 self.page_prev();
                 return EngineOutput {
                     consumed: true,
@@ -1164,7 +1206,7 @@ impl WubiEngine {
                     ..Default::default()
                 };
             }
-            if c == '=' || c == ']' {
+            if (c == '=' || c == ']') && !self.uses_spaceless() {
                 self.page_next();
                 return EngineOutput {
                     consumed: true,
@@ -1178,6 +1220,19 @@ impl WubiEngine {
                     return out;
                 }
             }
+        }
+
+        if self.is_composing() && self.uses_spaceless() && !c.is_whitespace() {
+            let punctuation = if self.config.smart_punctuation {
+                self.map_chinese_punctuation(c)
+            } else {
+                None
+            };
+            let mut out = self.finish_spaceless(timestamp_ms);
+            out.commit_text.push_str(&punctuation.unwrap_or_else(|| c.to_string()));
+            self.user.break_single_burst();
+            self.clear_context();
+            return out;
         }
 
         // Chinese smart punctuation (commits active candidate #1 first if composing!)
@@ -1215,6 +1270,16 @@ impl WubiEngine {
     fn push_code_observation(&mut self, obs: KeyObs) -> EngineOutput {
         let mut commit_prefix = String::new();
         let mut notice = String::new();
+        if self.uses_spaceless() && obs.ch.is_ascii_lowercase() {
+            if obs.ch != b'z' || !self.config.z_omnipotent {
+                return self.push_spaceless(obs);
+            }
+            if self.is_composing() {
+                let out = self.finish_spaceless(obs.timestamp_ms);
+                commit_prefix = out.commit_text;
+                notice = out.notice;
+            }
+        }
 
         let is_z_pinyin_mode = self.config.z_omnipotent
             && self.raw_code.starts_with('z')
@@ -1373,6 +1438,91 @@ impl WubiEngine {
         false
     }
 
+    fn update_spaceless(&mut self) {
+        let (Some(dict), Some(aux)) = (
+            self.dicts[self.config.schema.slot_index()].as_ref(),
+            self.aux.as_ref(),
+        ) else {
+            return;
+        };
+        let Some(model) = aux.neural_view() else {
+            return;
+        };
+        self.stream.update(
+            &self.raw_code,
+            &Decoder {
+                dict,
+                aux,
+                model,
+                config: &self.config,
+                user: &self.user,
+                context: &self.recent_context,
+            },
+            &self.neural_tracker.active,
+        );
+    }
+
+    fn show_spaceless_candidates(&mut self) {
+        let paths = self.stream.paths();
+        let scores: Vec<f32> = paths.iter().map(|path| path.score).collect();
+        self.candidates = paths
+            .iter()
+            .zip(softmax_confidences(&scores))
+            .map(|(path, confidence)| Candidate {
+                text: path.text.clone(),
+                matched_code: PackedCode::EMPTY,
+                comment: String::new(),
+                badge: CandidateBadge::None,
+                confidence,
+                is_exact: true,
+            })
+            .collect();
+    }
+
+    fn push_spaceless(&mut self, obs: KeyObs) -> EngineOutput {
+        self.raw_code.push(obs.ch as char);
+        self.observations.push(obs);
+        self.page = 0;
+        self.update_spaceless();
+        let dict = self.dicts[self.config.schema.slot_index()].as_ref().unwrap();
+        let (cut, segments) = self.stream.take_stable_prefix(
+            &self.raw_code,
+            dict,
+            &self.user,
+            self.config.enable_rare_charset,
+        );
+        let mut out = EngineOutput {
+            consumed: true,
+            ..Default::default()
+        };
+        if cut > 0 {
+            self.raw_code.drain(..cut);
+            self.observations.drain(..cut);
+            for segment in segments {
+                self.finalize_commit(&segment, None, obs.timestamp_ms, &mut out.notice);
+                out.commit_text.push_str(&segment);
+            }
+        }
+        self.show_spaceless_candidates();
+        out.preedit = self.preedit();
+        out
+    }
+
+    fn finish_spaceless(&mut self, timestamp_ms: u64) -> EngineOutput {
+        if let Some(out) = self.select_abs_candidate(0, timestamp_ms) {
+            return out;
+        }
+        let text = self.preedit();
+        self.clear_composition();
+        self.user.break_single_burst();
+        self.clear_context();
+        EngineOutput {
+            consumed: true,
+            commit_text: text,
+            ..Default::default()
+        }
+    }
+
     fn finalize_commit(
         &mut self,
         text: &str,
@@ -1500,6 +1650,7 @@ impl WubiEngine {
 
     pub fn rebuild_candidates(&mut self) {
         self.candidates.clear();
+        self.stream = Stream::default();
         self.hold_fourth_for_split = false;
         self.pending_empty_split = None;
         self.top_typo_spatial_logp = None;
@@ -1508,6 +1659,11 @@ impl WubiEngine {
         }
         let slot = self.config.schema.slot_index();
         if self.dicts[slot].is_none() {
+            return;
+        }
+        if self.uses_spaceless() {
+            self.update_spaceless();
+            self.show_spaceless_candidates();
             return;
         }
 
