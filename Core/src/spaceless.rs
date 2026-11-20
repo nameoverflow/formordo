@@ -2,6 +2,7 @@ use crate::code::PackedCode;
 use crate::config::WubiConfig;
 use crate::format::{AuxView, DictView};
 use crate::neural::{NeuralView, RwkvState};
+use crate::typo::{generate_hypotheses, CorrectionKind, KeyLayout, KeyObs};
 use crate::user_data::UserStore;
 use std::collections::VecDeque;
 
@@ -18,12 +19,21 @@ pub(crate) struct Decoder<'a> {
     pub config: &'a WubiConfig,
     pub user: &'a UserStore,
     pub context: &'a [char],
+    pub layout: &'a KeyLayout,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 struct Boundary {
     keys: usize,
     text_bytes: usize,
+    code: PackedCode,
+    correction: CorrectionKind,
+}
+
+pub(crate) struct Segment {
+    pub text: String,
+    pub code: PackedCode,
+    pub correction: CorrectionKind,
 }
 
 pub(crate) struct Path {
@@ -39,24 +49,38 @@ impl Path {
             .boundaries
             .binary_search_by_key(&boundary.keys, |b| b.keys)
             .ok()?;
-        (self.boundaries[i] == boundary).then_some(i)
+        (self.boundaries[i].text_bytes == boundary.text_bytes).then_some(i)
     }
 
     pub fn tail_start(&self) -> usize {
         self.boundaries.iter().rev().nth(1).map_or(0, |b| b.keys)
     }
 
-    pub fn segments(&self, keys: usize) -> Vec<String> {
+    pub fn segments(&self, keys: usize) -> Vec<Segment> {
         let mut start = 0;
         self.boundaries
             .iter()
             .take_while(|boundary| boundary.keys <= keys)
             .map(|boundary| {
-                let text = self.text[start..boundary.text_bytes].to_owned();
+                let segment = Segment {
+                    text: self.text[start..boundary.text_bytes].to_owned(),
+                    code: boundary.code,
+                    correction: boundary.correction,
+                };
                 start = boundary.text_bytes;
-                text
+                segment
             })
             .collect()
+    }
+
+    pub fn correction_hint(&self, keys: usize) -> String {
+        self.boundaries
+            .iter()
+            .take_while(|boundary| boundary.keys <= keys)
+            .filter(|boundary| boundary.correction != CorrectionKind::Exact)
+            .map(|boundary| boundary.code.as_string())
+            .collect::<Vec<_>>()
+            .join("·")
     }
 
     fn code_segments<'a>(&self, code: &'a str) -> Vec<&'a str> {
@@ -75,7 +99,7 @@ impl Path {
 
 pub(crate) struct StablePrefix {
     pub keys: usize,
-    pub segments: Vec<String>,
+    pub segments: Vec<Segment>,
     pub codes: Vec<String>,
 }
 
@@ -87,8 +111,8 @@ pub(crate) struct Stream {
 }
 
 impl Stream {
-    pub fn update(&mut self, code: &str, decoder: &Decoder<'_>, initial: &RwkvState) {
-        while !self.layers.is_empty() && self.first + self.layers.len() > code.len() + 1 {
+    pub fn update(&mut self, observations: &[KeyObs], decoder: &Decoder<'_>, initial: &RwkvState) {
+        while !self.layers.is_empty() && self.first + self.layers.len() > observations.len() + 1 {
             self.layers.pop_back();
         }
         if self.layers.is_empty() || (self.first > 0 && self.layers.len() < MAX_CODE_LEN) {
@@ -101,8 +125,8 @@ impl Stream {
                 state: initial.clone(),
             }]);
         }
-        for end in self.first + self.layers.len()..=code.len() {
-            let next = self.extend(decoder, &code.as_bytes()[..end]);
+        for end in self.first + self.layers.len()..=observations.len() {
+            let next = self.extend(decoder, &observations[..end]);
             self.layers.push_back(next);
             if self.layers.len() > RETAINED_LAYERS {
                 self.layers.pop_front();
@@ -150,7 +174,7 @@ impl Stream {
         code: &str,
         dict: &DictView,
         user: &UserStore,
-        include_rare: bool,
+        config: &WubiConfig,
     ) -> Option<StablePrefix> {
         let limit = code.len().checked_sub(COMMIT_DELAY)?;
         let best = self.paths().first()?;
@@ -165,8 +189,11 @@ impl Stream {
                 return None;
             }
             let end = code.len() - tail_len;
+            // An invalid raw tail can still grow into a corrected code on the next key.
             if tail_len > 0
-                && dict.valid_next_letters_mask(&code.as_bytes()[end..], include_rare) == 0
+                && !config.typo.enabled
+                && dict.valid_next_letters_mask(&code.as_bytes()[end..], config.enable_rare_charset)
+                    == 0
                 && user.valid_next_letters_mask(&code.as_bytes()[end..]) == 0
             {
                 continue;
@@ -224,47 +251,79 @@ impl Stream {
         })
     }
 
-    fn extend(&self, decoder: &Decoder<'_>, code: &[u8]) -> Vec<Path> {
+    fn extend(&self, decoder: &Decoder<'_>, observations: &[KeyObs]) -> Vec<Path> {
         struct Step<'a> {
             parent: &'a Path,
             text: &'a str,
             estimate: f32,
             bias: f32,
+            code: PackedCode,
+            correction: CorrectionKind,
         }
 
         let mut steps = Vec::new();
-        let end = code.len();
+        let end = observations.len();
         for len in 1..=end.min(MAX_CODE_LEN) {
             let parents = self.layer(end - len);
             if parents.is_empty() {
                 continue;
             }
-            let Some(key) = PackedCode::from_bytes(&code[end - len..]) else {
-                continue;
-            };
-            let hits = decoder
-                .dict
-                .lookup_exact(key, decoder.config.enable_rare_charset);
-            let users = decoder.user.lookup_exact(key);
-            let limit = [1, 2, 4, 6][len - 1];
-            let entries = hits
+            let window = &observations[end - len..];
+            let hypotheses = generate_hypotheses(
+                window,
+                decoder.layout,
+                &decoder.user.touch_profile,
+                &decoder.config.typo,
+            );
+            let exact_logp = hypotheses
                 .iter()
-                .take(limit)
-                .enumerate()
-                .map(|(rank, entry)| (rank, entry.text, entry.weight, false))
-                .chain(
-                    users
-                        .into_iter()
-                        .take(4)
+                .find(|hypothesis| hypothesis.kind == CorrectionKind::Exact)
+                .map_or(0.0, |hypothesis| hypothesis.spatial_logp);
+            let entries = hypotheses
+                .into_iter()
+                .filter(|hypothesis| {
+                    // With a one-letter shortcut, require touch evidence before trying another key.
+                    len > 1 || hypothesis.kind != CorrectionKind::NeighborKey
+                })
+                .flat_map(|hypothesis| {
+                    let key = hypothesis.code;
+                    let correction = hypothesis.kind;
+                    let exact = correction == CorrectionKind::Exact;
+                    let relative_logp = if correction == CorrectionKind::Transposition {
+                        hypothesis.spatial_logp
+                    } else {
+                        hypothesis.spatial_logp - exact_logp
+                    };
+                    let cost = match correction {
+                        CorrectionKind::Exact => 0.0,
+                        CorrectionKind::TouchBoundary if len > 1 => 2.5,
+                        _ => 4.5,
+                    };
+                    let penalty = cost - 1.65 * relative_logp.min(0.0);
+                    let hits = decoder
+                        .dict
+                        .lookup_exact(key, decoder.config.enable_rare_charset);
+                    let users = decoder.user.lookup_exact(key);
+                    let limit = if exact { [1, 2, 4, 6][len - 1] } else { 2 };
+                    hits.into_iter()
+                        .take(limit)
                         .enumerate()
-                        .map(|(rank, (text, _, _))| (rank, text, 500, true)),
-                );
-            for (rank, text, weight, custom) in entries {
+                        .map(|(rank, entry)| (rank, entry.text, entry.weight, false))
+                        .chain(
+                            users
+                                .into_iter()
+                                .take(if exact { 4 } else { 2 })
+                                .enumerate()
+                                .map(|(rank, (text, _, _))| (rank, text, 500, true)),
+                        )
+                        .map(move |entry| (entry, key, correction, penalty))
+                });
+            for ((rank, text, weight, custom), code, correction, penalty) in entries {
                 let mut chars = text.chars();
                 let Some(first) = chars.next() else { continue };
                 let second = chars.next();
                 let n_chars = 1 + usize::from(second.is_some()) + chars.count();
-                let mut bias = n_chars as f32 * 0.3 - 0.2;
+                let mut bias = n_chars as f32 * 0.3 - 0.2 - penalty;
                 if decoder.config.strict_shortcode && n_chars == 1 {
                     if let Some(meta) = decoder.dict.char_meta(first) {
                         let short_len = meta.primary_short_code.len();
@@ -324,6 +383,8 @@ impl Stream {
                         text,
                         estimate: parent.score + contextual_bias + estimate,
                         bias: contextual_bias,
+                        code,
+                        correction,
                     });
                 }
             }
@@ -346,6 +407,8 @@ impl Stream {
             boundaries.push(Boundary {
                 keys: end,
                 text_bytes: text.len(),
+                code: step.code,
+                correction: step.correction,
             });
             let path = Path {
                 text,

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 use wubi_core::config::{WubiConfig, WubiSchema};
-use wubi_core::engine::WubiEngine;
+use wubi_core::engine::{CandidateBadge, WubiEngine, KEY_BACKSPACE, KEY_RETURN, KEY_SPACE};
 use wubi_core::format::{AuxView, DictView};
 
 fn dicts_dir() -> PathBuf {
@@ -9,6 +9,57 @@ fn dicts_dir() -> PathBuf {
         .parent()
         .unwrap()
         .join("Resources/Dicts")
+}
+
+#[test]
+fn spaceless_touch_correction_learns_confirmed_code() {
+    let dir = dicts_dir();
+    if !dir.join("wubi86.wbdict").exists() {
+        return;
+    }
+    let mut config = WubiConfig { spaceless: true, ..WubiConfig::default() };
+    let mut engine = WubiEngine::new(config.clone());
+    engine.load_dict(WubiSchema::Wubi86, DictView::open_mmap(dir.join("wubi86.wbdict")).unwrap());
+    engine.set_aux(AuxView::open_mmap(dir.join("wubi_aux.wbaux")).unwrap());
+    let taps = [
+        (b'y', 4.54, 0.03),
+        (b'r', 3.02, 0.02),
+        (b'w', 1.01, -0.02),
+        (b'u', 5.98, 0.01),
+        (b'j', 6.5, 1.0),
+    ];
+    let type_taps = |engine: &mut WubiEngine| {
+        for (i, &(letter, x, y)) in taps.iter().enumerate() {
+            engine.push_touch_letter(letter, x, y, false, 100 + i as u64 * 70);
+        }
+    };
+    type_taps(&mut engine);
+    assert_eq!(engine.raw_code(), "yrwuj");
+    assert_eq!(engine.preedit(), "我们是");
+    let first = &engine.all_candidates()[0];
+    assert_eq!(first.badge, CandidateBadge::TypoCorrected);
+    assert_eq!(first.comment, "trwu");
+    assert!(!first.is_exact);
+    assert_eq!(engine.user.touch_profile.offset_for(b't'), (0.0, 0.0));
+
+    engine.handle_key_event(KEY_BACKSPACE, None, false, 500);
+    assert_eq!(engine.preedit(), "我们");
+    engine.push_touch_letter(b'j', 6.5, 1.0, false, 570);
+    let result = engine.handle_key_event(KEY_SPACE, Some(' '), false, 640);
+    assert_eq!(result.commit_text, "我们是");
+    assert!(engine.user.touch_profile.offset_for(b't').0 > 0.07);
+    assert_eq!(engine.user.touch_profile.keys[(b'j' - b'a') as usize].samples, 1);
+    assert_eq!(engine.user.touch_profile.keys[(b'y' - b'a') as usize].samples, 0);
+
+    engine.clear_context();
+    config.typo.enabled = false;
+    engine.set_config(config);
+    type_taps(&mut engine);
+    assert_eq!(engine.raw_code(), "yrwuj");
+    assert_ne!(engine.preedit(), "我们是");
+    assert!(engine.all_candidates().iter().all(|candidate| candidate.is_exact));
+    let raw = engine.handle_key_event(KEY_RETURN, None, false, 900);
+    assert_eq!(raw.commit_text, "yrwuj");
 }
 
 #[test]

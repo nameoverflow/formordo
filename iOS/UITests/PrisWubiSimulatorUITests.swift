@@ -265,6 +265,65 @@ final class PrisWubiSimulatorUITests: XCTestCase {
     }
 
     @MainActor
+    func testSpacelessTouchCalibrationAppearsInHost() throws {
+        let app = XCUIApplication()
+        app.launch()
+        app.tabBars.buttons["输入设置"].tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "86 版")).firstMatch.tap()
+        let streaming = app.switches["流式无空格连打（实验）"]
+        if streaming.value as? String == "0" { streaming.tap() }
+        XCTAssertEqual(streaming.value as? String, "1")
+
+        app.tabBars.buttons["误触与热区"].tap()
+        for title in ["统计 + 触控高斯误触纠正", "个人拇指热区 EMA 自适应"] {
+            let toggle = app.switches[title]
+            if toggle.value as? String == "0" { toggle.tap() }
+            XCTAssertEqual(toggle.value as? String, "1")
+        }
+        app.buttons["重置"].tap()
+
+        let typingApp = openLiveKeyboard()
+        let canvas = typingApp.otherElements["PrisWubiKeyCanvas"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        let origin = canvas.coordinate(withNormalizedOffset: .zero)
+        let layout = IOSKeyboardLayoutEngine().computeLayout(in: canvas.frame.size)
+        func letter(_ byte: UInt8) throws -> CGRect {
+            try XCTUnwrap(layout.keys.first { $0.kind == .letter(byte) }).frame
+        }
+        let t = try letter(UInt8(ascii: "t"))
+        let y = try letter(UInt8(ascii: "y"))
+        let touchX = t.midX + (y.midX - t.midX) * 0.60
+        origin.withOffset(CGVector(dx: touchX, dy: t.midY)).tap()
+        for byte in "rwu".utf8 {
+            let key = try letter(byte)
+            origin.withOffset(CGVector(dx: key.midX, dy: key.midY)).tap()
+        }
+        XCTAssertEqual(typingApp.staticTexts["PrisWubiSegmentedCode"].label, "yrwu")
+        let corrected = typingApp.staticTexts["我们 trwu"].firstMatch
+        XCTAssertTrue(corrected.waitForExistence(timeout: 3))
+        attachShot(name: "spaceless-neighbor-key-correction")
+        corrected.tap()
+        XCTAssertEqual(typingApp.textFields.firstMatch.value as? String, "我们")
+        XCTAssertFalse(typingApp.staticTexts["PrisWubiSegmentedCode"].exists)
+
+        Thread.sleep(forTimeInterval: 1.7) // Allow the keyboard's deferred user-data flush.
+        typingApp.launchArguments = []
+        typingApp.launch()
+        typingApp.tabBars.buttons["误触与热区"].tap()
+        let learnedT = typingApp.descendants(matching: .any)["TouchCalibration-t"].firstMatch
+        XCTAssertTrue(learnedT.waitForExistence(timeout: 5))
+        let sampled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "1 次采样"),
+            object: learnedT
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [sampled], timeout: 5), .completed)
+        XCTAssertEqual(typingApp.descendants(matching: .any)["TouchCalibration-y"].firstMatch.value as? String, "尚未采样")
+        attachShot(name: "spaceless-learned-touch-calibration")
+        typingApp.buttons["重置"].tap()
+        XCTAssertEqual(learnedT.value as? String, "尚未采样")
+    }
+
+    @MainActor
     private func openSpaceless98Keyboard() -> XCUIApplication {
         let app = XCUIApplication()
         app.launch()

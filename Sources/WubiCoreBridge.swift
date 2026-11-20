@@ -3,30 +3,34 @@ import Security
 
 // The Personal Team profile grants shared keychain groups for this team's apps.
 private enum IOSSharedSettings {
-    static var query: [String: Any]? {
+    static let preferencesAccount = "input-settings"
+    static let touchProfileAccount = "touch-profile"
+
+    private static func query(account: String) -> [String: Any]? {
         guard let group = Bundle.main.object(forInfoDictionaryKey: "PrisWubiSettingsGroup") as? String else { return nil }
         return [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "PrisWubi",
-                kSecAttrAccount as String: "input-settings", kSecAttrAccessGroup as String: group]
+                kSecAttrAccount as String: account, kSecAttrAccessGroup as String: group]
     }
 
-    static func read() -> String? {
-        guard var query else { return nil }
+    static func read(account: String) -> Data? {
+        guard var query = query(account: account) else { return nil }
         query[kSecReturnData as String] = true
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? Data
     }
 
-    static func write(_ toml: String) {
-        guard var query else { return }
-        let data = Data(toml.utf8)
+    @discardableResult
+    static func write(_ data: Data, account: String) -> Bool {
+        guard var query = query(account: account) else { return false }
         let update = [kSecValueData as String: data]
-        if SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecItemNotFound {
+        let status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        if status == errSecItemNotFound {
             query[kSecValueData as String] = data
             query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-            SecItemAdd(query as CFDictionary, nil)
+            return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
         }
+        return status == errSecSuccess
     }
 }
 #endif
@@ -356,6 +360,10 @@ public final class WubiBridge: ObservableObject {
 
     nonisolated(unsafe) private var handle: OpaquePointer?
     private let decoder = JSONDecoder()
+    #if os(iOS)
+    private let inMemoryOnly: Bool
+    private var lastSharedTouchProfile: [TouchKeyCalibrationItem]?
+    #endif
 
     @Published public private(set) var state: WubiActionState = .empty
     @Published public var prefs: WubiPreferences = WubiPreferences()
@@ -367,6 +375,9 @@ public final class WubiBridge: ObservableObject {
     public let hasSharedContainerAccess: Bool
 
     public init(customDictsDir: URL? = nil, inMemoryOnly: Bool = false) {
+        #if os(iOS)
+        self.inMemoryOnly = inMemoryOnly
+        #endif
         #if os(macOS)
         let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         let dotfile = home.appendingPathComponent(".priswubi.toml")
@@ -450,9 +461,11 @@ public final class WubiBridge: ObservableObject {
             _ = userDataURL.path.withCString { wubi_engine_load_user_data(h, $0) }
         }
         #if os(iOS)
-        if let shared = IOSSharedSettings.read() {
+        if let data = IOSSharedSettings.read(account: IOSSharedSettings.preferencesAccount),
+           let shared = String(data: data, encoding: .utf8) {
             shared.withCString { wubi_engine_set_config_toml(h, $0) }
         }
+        loadSharedTouchProfile()
         #endif
         let toml = takeString(wubi_engine_get_config_toml(h))
         self.prefs = WubiPreferences.fromTOML(toml)
@@ -468,7 +481,7 @@ public final class WubiBridge: ObservableObject {
         toml.withCString { wubi_engine_set_config_toml(h, $0) }
         if persist {
             #if os(iOS)
-            IOSSharedSettings.write(toml)
+            IOSSharedSettings.write(Data(toml.utf8), account: IOSSharedSettings.preferencesAccount)
             #endif
             _ = configURL.path.withCString { wubi_engine_save_config(h, $0) }
         }
@@ -498,6 +511,9 @@ public final class WubiBridge: ObservableObject {
     public func flushUserDataIfNeeded(refreshPublishedLists: Bool = true) {
         guard let h = handle else { return }
         if wubi_engine_is_user_dirty(h) {
+            #if os(iOS)
+            publishTouchProfile()
+            #endif
             _ = userDataURL.path.withCString { wubi_engine_save_user_data(h, $0) }
             if refreshPublishedLists {
                 refreshUserPhrases()
@@ -629,6 +645,9 @@ public final class WubiBridge: ObservableObject {
         guard let h = handle else { return }
         wubi_engine_reset_touch_profile(h)
         if persist {
+            #if os(iOS)
+            publishTouchProfile(isReset: true)
+            #endif
             flushUserDataIfNeeded()
         }
         refreshState()
@@ -645,13 +664,68 @@ public final class WubiBridge: ObservableObject {
     }
 
     public func refreshTouchProfile() {
-        guard let h = handle else { return }
+        touchCalibrations = readTouchProfile()
+    }
+
+    private func readTouchProfile() -> [TouchKeyCalibrationItem] {
+        guard let h = handle else { return [] }
         let json = takeString(wubi_engine_touch_profile_json(h))
-        if let data = json.data(using: .utf8),
-           let list = try? decoder.decode([TouchKeyCalibrationItem].self, from: data) {
-            self.touchCalibrations = list
+        return (try? decoder.decode([TouchKeyCalibrationItem].self, from: Data(json.utf8))) ?? []
+    }
+
+    #if os(iOS)
+    public func reloadTouchCalibration() {
+        loadSharedTouchProfile()
+        refreshTouchProfile()
+    }
+
+    private func readSharedTouchProfile() -> [TouchKeyCalibrationItem]? {
+        guard let data = IOSSharedSettings.read(account: IOSSharedSettings.touchProfileAccount),
+              let items = try? decoder.decode([TouchKeyCalibrationItem].self, from: data),
+              items.map(\.key) == "abcdefghijklmnopqrstuvwxyz".map(String.init) else { return nil }
+        return items
+    }
+
+    private func loadSharedTouchProfile() {
+        guard !inMemoryOnly else { return }
+        if let profile = readSharedTouchProfile() {
+            adoptSharedTouchProfile(profile)
+        } else {
+            // Migrate calibration from the keyboard's existing local user store.
+            publishTouchProfile()
         }
     }
+
+    private func adoptSharedTouchProfile(_ profile: [TouchKeyCalibrationItem]) {
+        lastSharedTouchProfile = profile
+        guard let h = handle, profile != readTouchProfile() else { return }
+        let offsets = profile.flatMap { [$0.dx, $0.dy] }
+        let counts = profile.map(\.samples)
+        offsets.withUnsafeBufferPointer { xy in
+            counts.withUnsafeBufferPointer { samples in
+                wubi_engine_set_touch_profile(h, xy.baseAddress, samples.baseAddress)
+            }
+        }
+    }
+
+    private func publishTouchProfile(isReset: Bool = false) {
+        guard !inMemoryOnly else { return }
+        let profile = readTouchProfile()
+        guard profile.count == 26,
+              isReset || (profile != lastSharedTouchProfile && profile.contains { $0.samples > 0 })
+        else { return }
+
+        // A running keyboard must not overwrite a reset made in the host app.
+        if !isReset, let current = readSharedTouchProfile(), current != lastSharedTouchProfile {
+            adoptSharedTouchProfile(current)
+            return
+        }
+        if let data = try? JSONEncoder().encode(profile),
+           IOSSharedSettings.write(data, account: IOSSharedSettings.touchProfileAccount) {
+            lastSharedTouchProfile = profile
+        }
+    }
+    #endif
 
     public func refreshState() {
         guard let h = handle else { return }

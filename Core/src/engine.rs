@@ -2,7 +2,7 @@ use crate::code::{expand_wildcards, PackedCode};
 use crate::config::{FourthEmptyBehavior, ShiftToggleMode, WubiConfig, WubiSchema};
 use crate::format::{AuxView, DictView, ENTRY_FLAG_SYMBOL};
 use crate::neural::{NeuralContextTracker, NeuralView, RwkvState};
-use crate::spaceless::{Decoder, Stream};
+use crate::spaceless::{Decoder, Segment, Stream};
 use crate::typo::{generate_hypotheses, softmax_confidences, CorrectionKind, KeyLayout, KeyObs};
 use crate::user_data::UserStore;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -842,20 +842,25 @@ impl WubiEngine {
     pub fn select_abs_candidate(&mut self, abs_idx: usize, timestamp_ms: u64) -> Option<EngineOutput> {
         let cand = self.candidates.get(abs_idx)?.clone();
         let mut notice = String::new();
-        let commit_text = if self.uses_spaceless() && cand.matched_code.is_empty() {
-            let path = self.stream.paths().iter().find(|path| path.text == cand.text)?;
-            for segment in path.segments(self.raw_code.len()) {
-                self.finalize_commit(&segment, None, timestamp_ms, &mut notice);
-            }
-            cand.text
-        } else if self.uses_spaceless() && cand.matched_code.len() < self.raw_code.len() {
-            let start = self.raw_code.len() - cand.matched_code.len();
-            let mut segments = self.stream.paths().first()?.segments(start);
-            segments.push(cand.text);
-            for segment in &segments {
-                self.finalize_commit(segment, None, timestamp_ms, &mut notice);
-            }
-            segments.concat()
+        let commit_text = if self.uses_spaceless() {
+            let segments = if cand.matched_code.is_empty() {
+                let path = self.stream.paths().iter().find(|path| path.text == cand.text)?;
+                path.segments(self.raw_code.len())
+            } else {
+                let start = self.raw_code.len() - cand.matched_code.len();
+                let mut segments = if start == 0 {
+                    Vec::new()
+                } else {
+                    self.stream.paths().first()?.segments(start)
+                };
+                segments.push(Segment {
+                    text: cand.text,
+                    code: cand.matched_code,
+                    correction: CorrectionKind::Exact,
+                });
+                segments
+            };
+            self.finalize_stream_segments(segments, true, timestamp_ms, &mut notice)
         } else {
             self.finalize_commit(&cand.text, Some(cand.matched_code), timestamp_ms, &mut notice);
             cand.text
@@ -1469,7 +1474,7 @@ impl WubiEngine {
             return;
         };
         self.stream.update(
-            &self.raw_code,
+            &self.observations,
             &Decoder {
                 dict,
                 aux,
@@ -1477,6 +1482,7 @@ impl WubiEngine {
                 config: &self.config,
                 user: &self.user,
                 context: &self.recent_context,
+                layout: &self.key_layout,
             },
             &self.neural_tracker.active,
         );
@@ -1488,13 +1494,17 @@ impl WubiEngine {
         self.candidates = paths
             .iter()
             .zip(softmax_confidences(&scores))
-            .map(|(path, confidence)| Candidate {
-                text: path.text.clone(),
-                matched_code: PackedCode::EMPTY,
-                comment: String::new(),
-                badge: CandidateBadge::None,
-                confidence,
-                is_exact: true,
+            .map(|(path, confidence)| {
+                let comment = path.correction_hint(self.raw_code.len());
+                let is_exact = comment.is_empty();
+                Candidate {
+                    text: path.text.clone(),
+                    matched_code: PackedCode::EMPTY,
+                    comment,
+                    badge: if is_exact { CandidateBadge::None } else { CandidateBadge::TypoCorrected },
+                    confidence,
+                    is_exact,
+                }
             })
             .collect();
         let Some(dict) = self.dicts[self.config.schema.slot_index()].as_ref() else {
@@ -1521,15 +1531,18 @@ impl WubiEngine {
         }) else {
             return;
         };
+        let start = self.raw_code.len() - code.len();
+        let comment = paths.first().map_or_else(String::new, |path| path.correction_hint(start));
+        let is_exact = comment.is_empty();
         let mut singles: Vec<_> = hits.into_iter()
             .filter(|hit| self.candidates.first().is_none_or(|first| first.text != hit.text))
             .map(|hit| Candidate {
                 text: hit.text.to_owned(),
                 matched_code: code,
-                comment: String::new(),
-                badge: CandidateBadge::None,
+                comment: comment.clone(),
+                badge: if is_exact { CandidateBadge::None } else { CandidateBadge::TypoCorrected },
                 confidence: 0.0,
-                is_exact: true,
+                is_exact,
             })
             .collect();
         let lead = usize::from(!self.candidates.is_empty());
@@ -1551,22 +1564,24 @@ impl WubiEngine {
             &self.raw_code,
             dict,
             &self.user,
-            self.config.enable_rare_charset,
+            &self.config,
         );
         let mut out = EngineOutput {
             consumed: true,
             ..Default::default()
         };
         if let Some(prefix) = stable {
+            out.commit_text = self.finalize_stream_segments(
+                prefix.segments,
+                false,
+                obs.timestamp_ms,
+                &mut out.notice,
+            );
             self.raw_code.drain(..prefix.keys);
             self.observations.drain(..prefix.keys);
             self.committed_stream_codes.extend(prefix.codes);
             while self.committed_stream_codes.len() > 32 {
                 self.committed_stream_codes.pop_front();
-            }
-            for segment in prefix.segments {
-                self.finalize_commit(&segment, None, obs.timestamp_ms, &mut out.notice);
-                out.commit_text.push_str(&segment);
             }
         }
         self.show_spaceless_candidates();
@@ -1589,6 +1604,49 @@ impl WubiEngine {
         }
     }
 
+    fn finalize_stream_segments(
+        &mut self,
+        segments: Vec<Segment>,
+        confirmed_by_user: bool,
+        timestamp_ms: u64,
+        notice: &mut String,
+    ) -> String {
+        let mut text = String::new();
+        let mut start = 0;
+        for segment in segments {
+            let end = start + segment.code.len();
+            if segment.correction == CorrectionKind::Exact
+                || (confirmed_by_user && segment.correction != CorrectionKind::Transposition)
+            {
+                self.learn_touch_offsets(segment.code, start..end);
+            }
+            self.finalize_commit(&segment.text, None, timestamp_ms, notice);
+            text.push_str(&segment.text);
+            start = end;
+        }
+        text
+    }
+
+    fn learn_touch_offsets(&mut self, code: PackedCode, range: std::ops::Range<usize>) {
+        if !self.config.typo.enabled
+            || !self.config.typo.touch_hitbox_adapt
+            || range.len() != code.len()
+        {
+            return;
+        }
+        let Some(observations) = self.observations.get(range) else {
+            return;
+        };
+        let (keys, len) = code.to_bytes_buf();
+        for (obs, &key) in observations.iter().zip(&keys[..len]) {
+            if obs.has_touch {
+                let (cx, cy) = self.key_layout.center_of(key);
+                self.user.touch_profile.observe(key, obs.norm_x - cx, obs.norm_y - cy);
+                self.user.dirty = true;
+            }
+        }
+    }
+
     fn finalize_commit(
         &mut self,
         text: &str,
@@ -1597,22 +1655,8 @@ impl WubiEngine {
         notice: &mut String,
     ) {
         // 1. Update personal touch-region adaptive offsets if touch observations match `matched_code`!
-        if self.config.typo.enabled && self.config.typo.touch_hitbox_adapt {
-            if let Some(code) = matched_code {
-                let (code_bytes, code_len) = code.to_bytes_buf();
-                if code_len == self.observations.len() {
-                    for (i, obs) in self.observations.iter().enumerate() {
-                        if obs.has_touch {
-                            let target_key = code_bytes[i];
-                            let (cx, cy) = self.key_layout.center_of(target_key);
-                            self.user
-                                .touch_profile
-                                .observe(target_key, obs.norm_x - cx, obs.norm_y - cy);
-                            self.user.dirty = true;
-                        }
-                    }
-                }
-            }
+        if let Some(code) = matched_code {
+            self.learn_touch_offsets(code, 0..self.observations.len());
         }
 
         // 2. Update personal history & consecutive auto-phrase learning

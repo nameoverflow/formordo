@@ -1,7 +1,7 @@
 use crate::config::{WubiConfig, WubiSchema};
 use crate::engine::{EngineOutput, WubiEngine};
 use crate::format::{AuxView, DictView};
-use crate::user_data::UserStore;
+use crate::user_data::{TouchKeyOffset, UserStore, MAX_TOUCH_OFFSET};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
@@ -354,6 +354,29 @@ pub extern "C" fn wubi_engine_reset_touch_profile(handle: *mut WubiEngineHandle)
         h.inner.user.touch_profile.reset();
         h.inner.user.dirty = true;
     }
+}
+
+#[no_mangle]
+pub extern "C" fn wubi_engine_set_touch_profile(
+    handle: *mut WubiEngineHandle,
+    offsets_xy_52: *const f32,
+    counts_26: *const u32,
+) {
+    let Some(h) = (unsafe { handle.as_mut() }) else { return };
+    if offsets_xy_52.is_null() || counts_26.is_null() {
+        return;
+    }
+    let offsets = unsafe { core::slice::from_raw_parts(offsets_xy_52, 52) };
+    let counts = unsafe { core::slice::from_raw_parts(counts_26, 26) };
+    if offsets.iter().any(|offset| !offset.is_finite()) {
+        return;
+    }
+    h.inner.user.touch_profile.keys = std::array::from_fn(|i| TouchKeyOffset {
+        dx: offsets[i * 2].clamp(-MAX_TOUCH_OFFSET, MAX_TOUCH_OFFSET),
+        dy: offsets[i * 2 + 1].clamp(-MAX_TOUCH_OFFSET, MAX_TOUCH_OFFSET),
+        samples: counts[i],
+    });
+    h.inner.user.dirty = true;
 }
 
 #[no_mangle]

@@ -57,6 +57,7 @@ public struct IOSHostRootView: View {
             typoTab
                 .tabItem { Label(IOSHostTab.typo.title, systemImage: IOSHostTab.typo.icon) }
                 .tag(IOSHostTab.typo)
+                .onAppear { bridge.reloadTouchCalibration() }
 
             lexiconTab
                 .tabItem { Label(IOSHostTab.lexicon.title, systemImage: IOSHostTab.lexicon.icon) }
@@ -560,7 +561,7 @@ public struct IOSTouchHitboxMapCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("26 键个人触控热区偏移图")
                         .font(.system(size: 14.5, weight: .semibold))
-                    Text("橙点显示已学习的拇指触点中心漂移（自动向习惯方向扩展判定边界）")
+                    Text("用形序键盘选词后自动采样。橙点表示已学习的触点中心，偏移会参与误触纠正。")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -660,5 +661,9 @@ public struct IOSTouchHitboxMapCard: View {
                     .offset(x: dxPt, y: 6 + dyPt)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(keyStr.uppercased())
+        .accessibilityValue(hasSamples ? "\(cal?.samples ?? 0) 次采样" : "尚未采样")
+        .accessibilityIdentifier("TouchCalibration-\(keyStr)")
     }
 }

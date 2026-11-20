@@ -42,6 +42,12 @@ void wubi_engine_set_key_layout(
     float pitch_y
 );
 void wubi_engine_reset_touch_profile(WubiEngineHandle *handle);
+// Offsets and sample counts are indexed by key, from 'a' to 'z'.
+void wubi_engine_set_touch_profile(
+    WubiEngineHandle *handle,
+    const float *offsets_xy_52,
+    const uint32_t *counts_26
+);
 
 char *wubi_engine_add_user_phrase(WubiEngineHandle *handle, const char *phrase);
 bool wubi_engine_remove_user_phrase(WubiEngineHandle *handle, const char *phrase);
