@@ -670,8 +670,7 @@ private final class IOSCodeStripView: UIView, UIGestureRecognizerDelegate {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        layer.cornerRadius = 5
-        layer.cornerCurve = .continuous
+        isOpaque = false
         clipsToBounds = true
         isHidden = true
         isAccessibilityElement = true
@@ -705,7 +704,6 @@ private final class IOSCodeStripView: UIView, UIGestureRecognizerDelegate {
             return
         }
 
-        backgroundColor = UIColor(white: dark ? 1 : 0, alpha: dark ? 0.08 : 0.048)
         let activeColor = UIColor(white: dark ? 0.96 : 0.16, alpha: 1)
         let previousColor = UIColor(white: dark ? 0.70 : 0.39, alpha: 1)
         let separatorColor = UIColor(white: dark ? 0.58 : 0.50, alpha: 1)
