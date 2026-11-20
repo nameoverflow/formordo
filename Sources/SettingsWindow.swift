@@ -136,14 +136,23 @@ public struct SettingsRootView: View {
     private var schemaSectionView: some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionHeader(
-                title: "五笔字型版本与编码规则",
-                subtitle: "内置 86 / 98 / 新世纪三套零拷贝词典，切换版本时自造词自动按目标码表重算编码"
+                title: "输入方案与编码规则",
+                subtitle: "内置全拼、小鹤音形与 86 / 98 / 新世纪五笔零拷贝词典，共用 RWKV-7 整句模型与触点纠错"
             )
 
             settingsCard {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("当前五笔方案")
+                    Text("拼音 / 音形方案")
                         .font(.system(size: 13, weight: .medium))
+
+                    HStack(spacing: 10) {
+                        schemaOptionCard(id: 20, title: "全拼", desc: "整句连打 · 声母简拼 · 触点纠错")
+                        schemaOptionCard(id: 10, title: "小鹤音形", desc: "双拼 + 鹤形辅助码 · 定长/整句")
+                    }
+
+                    Text("五笔方案")
+                        .font(.system(size: 13, weight: .medium))
+                        .padding(.top, 4)
 
                     HStack(spacing: 10) {
                         schemaOptionCard(id: 86, title: "86 版五笔", desc: "王永民经典版 · 通用度最广")

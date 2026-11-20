@@ -6,18 +6,26 @@ private enum IOSSharedSettings {
     static let preferencesAccount = "input-settings"
     static let touchProfileAccount = "touch-profile"
 
-    private static func query(account: String) -> [String: Any]? {
-        guard let group = Bundle.main.object(forInfoDictionaryKey: "PrisWubiSettingsGroup") as? String else { return nil }
-        return [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "PrisWubi",
+    private static func query(account: String, groupKey: String = "JuxuSettingsGroup", service: String = "Juxu") -> [String: Any]? {
+        guard let group = Bundle.main.object(forInfoDictionaryKey: groupKey) as? String else { return nil }
+        return [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                 kSecAttrAccount as String: account, kSecAttrAccessGroup as String: group]
     }
 
     static func read(account: String) -> Data? {
-        guard var query = query(account: account) else { return nil }
-        query[kSecReturnData as String] = true
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? Data
+        for (groupKey, service) in [("JuxuSettingsGroup", "Juxu"), ("PrisWubiSettingsGroup", "PrisWubi")] {
+            if var q = query(account: account, groupKey: groupKey, service: service) {
+                q[kSecReturnData as String] = true
+                var result: CFTypeRef?
+                if SecItemCopyMatching(q as CFDictionary, &result) == errSecSuccess, let data = result as? Data {
+                    if groupKey != "JuxuSettingsGroup" {
+                        write(data, account: account)
+                    }
+                    return data
+                }
+            }
+        }
+        return nil
     }
 
     @discardableResult
@@ -197,7 +205,7 @@ public struct UserPhraseRecord: Codable, Identifiable, Equatable, Sendable {
 }
 
 public struct WubiPreferences: Equatable, Sendable {
-    public static let appGroupIdentifier = "group.com.priswubi.shared"
+    public static let appGroupIdentifier = "group.com.hcyue.juxu.shared"
 
     public var schemaId: UInt32 = 86
     public var pageSize: Int = 5
@@ -222,6 +230,7 @@ public struct WubiPreferences: Equatable, Sendable {
     public var autoPhraseThreshold: Int = 2
     public var zOmnipotent: Bool = true
     public var enableRareCharset: Bool = false
+    public var pinyinInitialAbbr: Bool = true
 
     public var typoEnabled: Bool = true
     public var touchHitboxAdapt: Bool = true
@@ -237,10 +246,12 @@ public struct WubiPreferences: Equatable, Sendable {
         switch schemaId {
         case 98: schemaTag = "98"
         case 6: schemaTag = "06"
+        case 10: schemaTag = "xiaohe"
+        case 20: schemaTag = "pinyin"
         default: schemaTag = "86"
         }
         return """
-        # 棱五笔 (PrisWubi) 配置文件 — macOS 与 iOS 通用内核
+        # 句序 (Juxu) 配置文件 — macOS 与 iOS 通用内核
         # 修改保存后将实时生效
 
         [general]
@@ -268,6 +279,7 @@ public struct WubiPreferences: Equatable, Sendable {
         auto_phrase_threshold = \(autoPhraseThreshold)
         z_omnipotent = \(zOmnipotent)
         enable_rare_charset = \(enableRareCharset)
+        pinyin_initial_abbr = \(pinyinInitialAbbr)
 
         [typo_correction]
         enabled = \(typoEnabled)
@@ -299,8 +311,11 @@ public struct WubiPreferences: Equatable, Sendable {
 
             switch (section, key) {
             case (_, "schema"):
-                if val == "98" { p.schemaId = 98 }
-                else if val == "06" || val == "2006" { p.schemaId = 6 }
+                let lower = val.lowercased()
+                if lower == "98" { p.schemaId = 98 }
+                else if lower == "06" || lower == "2006" { p.schemaId = 6 }
+                else if lower == "xiaohe" || lower == "flypy" || lower == "10" { p.schemaId = 10 }
+                else if lower == "pinyin" || lower == "quanpin" || lower == "20" { p.schemaId = 20 }
                 else { p.schemaId = 86 }
             case (_, "page_size"):
                 p.pageSize = min(9, max(3, Int(val) ?? 5))
@@ -344,6 +359,8 @@ public struct WubiPreferences: Equatable, Sendable {
                 p.zOmnipotent = boolVal
             case (_, "enable_rare_charset"):
                 p.enableRareCharset = boolVal
+            case (_, "pinyin_initial_abbr"):
+                p.pinyinInitialAbbr = boolVal
             case ("typo_correction", "enabled"):
                 p.typoEnabled = boolVal
             case (_, "touch_hitbox_adapt"):
@@ -390,14 +407,31 @@ public final class WubiBridge: ObservableObject {
         #endif
         #if os(macOS)
         let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-        let dotfile = home.appendingPathComponent(".priswubi.toml")
+        let dotfile = home.appendingPathComponent(".juxu.toml")
+        let legacyDotfile = home.appendingPathComponent(".priswubi.toml")
         let appSupport = home
+            .appendingPathComponent("Library/Application Support/Juxu", isDirectory: true)
+        let legacyAppSupport = home
             .appendingPathComponent("Library/Application Support/PrisWubi", isDirectory: true)
         if !inMemoryOnly {
-            try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+            let fm = FileManager.default
+            if !fm.fileExists(atPath: appSupport.path), fm.fileExists(atPath: legacyAppSupport.path) {
+                try? fm.createDirectory(at: appSupport, withIntermediateDirectories: true)
+                for file in ["config.toml", "user_data.tsv"] {
+                    let src = legacyAppSupport.appendingPathComponent(file)
+                    let dst = appSupport.appendingPathComponent(file)
+                    if fm.fileExists(atPath: src.path), !fm.fileExists(atPath: dst.path) {
+                        try? fm.copyItem(at: src, to: dst)
+                    }
+                }
+            } else {
+                try? fm.createDirectory(at: appSupport, withIntermediateDirectories: true)
+            }
         }
         if FileManager.default.fileExists(atPath: dotfile.path) {
             self.configURL = dotfile
+        } else if FileManager.default.fileExists(atPath: legacyDotfile.path) {
+            self.configURL = legacyDotfile
         } else {
             self.configURL = appSupport.appendingPathComponent("config.toml")
         }
@@ -453,6 +487,10 @@ public final class WubiBridge: ObservableObject {
                 _ = p98.withCString { wubi_engine_load_dict_mmap(h, 98, $0) }
                 let p06 = dir.appendingPathComponent("wubi06.wbdict").path
                 _ = p06.withCString { wubi_engine_load_dict_mmap(h, 6, $0) }
+                let pXh = dir.appendingPathComponent("xiaohe.wbdict").path
+                _ = pXh.withCString { wubi_engine_load_dict_mmap(h, 10, $0) }
+                let pPy = dir.appendingPathComponent("pinyin.pydict").path
+                _ = pPy.withCString { wubi_engine_load_pinyin_dict_mmap(h, $0) }
                 let pAux = dir.appendingPathComponent("wubi_aux.wbaux").path
                 _ = pAux.withCString { wubi_engine_load_aux_mmap(h, $0) }
                 break

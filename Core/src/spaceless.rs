@@ -3,7 +3,9 @@ use crate::config::WubiConfig;
 use crate::format::{AuxView, DictView};
 use crate::neural::{NeuralView, RwkvState};
 use crate::personalization::Context as PersonalContext;
-use crate::typo::{generate_hypotheses, CorrectionKind, KeyLayout, KeyObs};
+use crate::typo::{
+    generate_hypotheses_with_options, CorrectionKind, KeyLayout, KeyObs,
+};
 use crate::user_data::UserStore;
 use std::collections::VecDeque;
 
@@ -275,11 +277,12 @@ impl Stream {
                 continue;
             }
             let window = &observations[end - len..];
-            let hypotheses = generate_hypotheses(
+            let hypotheses = generate_hypotheses_with_options(
                 window,
                 decoder.layout,
                 &decoder.user.touch_profile,
                 &decoder.config.typo,
+                decoder.config.schema.allows_z_code(),
             );
             let exact_logp = hypotheses
                 .iter()

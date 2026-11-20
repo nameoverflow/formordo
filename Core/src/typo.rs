@@ -142,12 +142,113 @@ const SIGMA_X: f32 = 0.34;
 const SIGMA_Y: f32 = 0.36;
 const MAX_BEAM: usize = 24;
 
-/// Generate ranked Wubi code hypotheses (`'a'..='y'`) for `observations` (`len = 1..=4`).
+/// Generate ranked code hypotheses (`'a'..='y'`, or `'a'..='z'` when `allow_z` is true)
+/// for `observations` (`len = 1..=4`).
 pub fn generate_hypotheses(
     observations: &[KeyObs],
     layout: &KeyLayout,
     profile: &TouchProfile,
     cfg: &TypoConfig,
+) -> Vec<CodeHypothesis> {
+    generate_hypotheses_with_options(observations, layout, profile, cfg, false)
+}
+
+/// Generate per-keystroke candidate choices `(digit_1_to_26, rel_logp, is_pressed_key, is_boundary)`.
+pub fn key_choices_for_obs(
+    obs: &KeyObs,
+    layout: &KeyLayout,
+    profile: &TouchProfile,
+    cfg: &TypoConfig,
+    allow_z: bool,
+) -> Vec<(u8, f32, bool, bool)> {
+    let max_d = if allow_z { 26u8 } else { 25u8 };
+    let max_ch = if allow_z { b'z' } else { b'y' };
+    let mut choices = Vec::<(u8, f32, bool, bool)>::new();
+    if obs.has_touch {
+        let mut raw_scores = [(0u8, f32::NEG_INFINITY); 26];
+        let mut max_lp = f32::NEG_INFINITY;
+        for d in 1..=max_d {
+            let k = b'a' + d - 1;
+            let (cx, cy) = layout.center_of(k);
+            let (ox, oy) = if cfg.touch_hitbox_adapt {
+                profile.offset_for(k)
+            } else {
+                (0.0, 0.0)
+            };
+            let dx = obs.norm_x - (cx + ox);
+            let dy = obs.norm_y - (cy + oy);
+            let lp = -(dx * dx) / (2.0 * SIGMA_X * SIGMA_X)
+                - (dy * dy) / (2.0 * SIGMA_Y * SIGMA_Y);
+            raw_scores[(d - 1) as usize] = (d, lp);
+            if lp > max_lp {
+                max_lp = lp;
+            }
+        }
+        let slice = &mut raw_scores[..max_d as usize];
+        slice.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
+        let second_rel = slice[1].1 - max_lp;
+        let near_border = second_rel >= -1.25; // Within ~0.40 key-widths of midpoint!
+
+        let pressed_d = if (b'a'..=max_ch).contains(&obs.ch) {
+            obs.ch - b'a' + 1
+        } else {
+            slice[0].0
+        };
+
+        for &(d, lp) in slice.iter().take(4) {
+            let rel = lp - max_lp;
+            if rel >= -4.8 || d == pressed_d {
+                let is_pressed = d == pressed_d;
+                choices.push((d, rel, is_pressed, !is_pressed && near_border && rel >= -1.45));
+            }
+        }
+        if !choices.iter().any(|x| x.0 == pressed_d) {
+            let pressed_lp = slice
+                .iter()
+                .find(|x| x.0 == pressed_d)
+                .map(|x| x.1 - max_lp)
+                .unwrap_or(-4.5);
+            choices.push((pressed_d, pressed_lp, true, false));
+        }
+    } else {
+        // Physical keyboard adjacency confusion model
+        let pressed_d = if (b'a'..=max_ch).contains(&obs.ch) {
+            obs.ch - b'a' + 1
+        } else {
+            return choices;
+        };
+        let (cx0, cy0) = layout.center_of(obs.ch);
+        choices.push((pressed_d, 0.0, true, false));
+        let mut neighbors = Vec::<(u8, f32)>::new();
+        for d in 1..=max_d {
+            if d == pressed_d {
+                continue;
+            }
+            let k = b'a' + d - 1;
+            let (cx, cy) = layout.center_of(k);
+            let dx = (cx - cx0).abs();
+            let dy = (cy - cy0).abs();
+            if dy < 0.1 && dx <= 1.05 {
+                // Horizontal adjacent key on same row
+                neighbors.push((d, -3.15));
+            } else if dy <= 1.05 && dx <= 0.85 {
+                // Adjacent row neighbor
+                neighbors.push((d, -3.80));
+            }
+        }
+        for (nd, lp) in neighbors.into_iter().take(4) {
+            choices.push((nd, lp, false, false));
+        }
+    }
+    choices
+}
+
+pub fn generate_hypotheses_with_options(
+    observations: &[KeyObs],
+    layout: &KeyLayout,
+    profile: &TouchProfile,
+    cfg: &TypoConfig,
+    allow_z: bool,
 ) -> Vec<CodeHypothesis> {
     if observations.is_empty() || observations.len() > 4 {
         return Vec::new();
@@ -155,8 +256,8 @@ pub fn generate_hypotheses(
     let raw_bytes: Vec<u8> = observations.iter().map(|o| o.ch).collect();
     let exact_packed = PackedCode::from_bytes(&raw_bytes);
 
-    // If typo correction is disabled or `'z'` omnipotent query is being used, only return exact.
-    if !cfg.enabled || raw_bytes.contains(&b'z') {
+    // If typo correction is disabled or `'z'` omnipotent query is being used (in Wubi), only return exact.
+    if !cfg.enabled || (!allow_z && raw_bytes.contains(&b'z')) {
         return exact_packed
             .map(|code| {
                 vec![CodeHypothesis {
@@ -169,86 +270,12 @@ pub fn generate_hypotheses(
             .unwrap_or_default();
     }
 
-    // Step 1: Per-position candidate keys ('a'..='y', digits 1..=25)
-    // Tuple: `(digit_1_to_25, rel_logp, is_pressed_key, is_boundary)`
+    // Step 1: Per-position candidate keys
     let mut step_choices: Vec<Vec<(u8, f32, bool, bool)>> = Vec::with_capacity(observations.len());
-
     for obs in observations {
-        let mut choices = Vec::<(u8, f32, bool, bool)>::new();
-        if obs.has_touch {
-            let mut raw_scores = [(0u8, f32::NEG_INFINITY); 25];
-            let mut max_lp = f32::NEG_INFINITY;
-            for d in 1..=25u8 {
-                let k = b'a' + d - 1;
-                let (cx, cy) = layout.center_of(k);
-                let (ox, oy) = if cfg.touch_hitbox_adapt {
-                    profile.offset_for(k)
-                } else {
-                    (0.0, 0.0)
-                };
-                let dx = obs.norm_x - (cx + ox);
-                let dy = obs.norm_y - (cy + oy);
-                let lp = -(dx * dx) / (2.0 * SIGMA_X * SIGMA_X)
-                    - (dy * dy) / (2.0 * SIGMA_Y * SIGMA_Y);
-                raw_scores[(d - 1) as usize] = (d, lp);
-                if lp > max_lp {
-                    max_lp = lp;
-                }
-            }
-            raw_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
-            let second_rel = raw_scores[1].1 - max_lp;
-            let near_border = second_rel >= -1.25; // Within ~0.40 key-widths of midpoint!
-
-            let pressed_d = if (b'a'..=b'y').contains(&obs.ch) {
-                obs.ch - b'a' + 1
-            } else {
-                raw_scores[0].0
-            };
-
-            for &(d, lp) in raw_scores.iter().take(4) {
-                let rel = lp - max_lp;
-                if rel >= -4.8 || d == pressed_d {
-                    let is_pressed = d == pressed_d;
-                    choices.push((d, rel, is_pressed, !is_pressed && near_border && rel >= -1.45));
-                }
-            }
-            if !choices.iter().any(|x| x.0 == pressed_d) {
-                let pressed_lp = raw_scores
-                    .iter()
-                    .find(|x| x.0 == pressed_d)
-                    .map(|x| x.1 - max_lp)
-                    .unwrap_or(-4.5);
-                choices.push((pressed_d, pressed_lp, true, false));
-            }
-        } else {
-            // Physical keyboard adjacency confusion model
-            let pressed_d = if (b'a'..=b'y').contains(&obs.ch) {
-                obs.ch - b'a' + 1
-            } else {
-                continue;
-            };
-            let (cx0, cy0) = layout.center_of(obs.ch);
-            choices.push((pressed_d, 0.0, true, false));
-            let mut neighbors = Vec::<(u8, f32)>::new();
-            for d in 1..=25u8 {
-                if d == pressed_d {
-                    continue;
-                }
-                let k = b'a' + d - 1;
-                let (cx, cy) = layout.center_of(k);
-                let dx = (cx - cx0).abs();
-                let dy = (cy - cy0).abs();
-                if dy < 0.1 && dx <= 1.05 {
-                    // Horizontal adjacent key on same row
-                    neighbors.push((d, -3.15));
-                } else if dy <= 1.05 && dx <= 0.85 {
-                    // Adjacent row neighbor
-                    neighbors.push((d, -3.80));
-                }
-            }
-            for (nd, lp) in neighbors.into_iter().take(4) {
-                choices.push((nd, lp, false, false));
-            }
+        let choices = key_choices_for_obs(obs, layout, profile, cfg, allow_z);
+        if choices.is_empty() {
+            return Vec::new();
         }
         step_choices.push(choices);
     }
@@ -312,7 +339,8 @@ pub fn generate_hypotheses(
     }
 
     // Step 3: Adjacent keystroke transposition (`ab -> ba`) for rapid bursts
-    if observations.len() >= 2 && raw_bytes.iter().all(|b| (b'a'..=b'y').contains(b)) {
+    let max_ch = if allow_z { b'z' } else { b'y' };
+    if observations.len() >= 2 && raw_bytes.iter().all(|b| (b'a'..=max_ch).contains(b)) {
         for i in 0..(observations.len() - 1) {
             if raw_bytes[i] == raw_bytes[i + 1] {
                 continue;

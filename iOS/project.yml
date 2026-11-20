@@ -1,6 +1,6 @@
-name: PrisWubi
+name: Juxu
 options:
-  bundleIdPrefix: com.hcyue.priswubi
+  bundleIdPrefix: com.hcyue.juxu
   deploymentTarget:
     iOS: "16.0"
   xcodeVersion: "16.0"
@@ -38,8 +38,9 @@ targets:
     info:
       path: HostApp/Info.plist
       properties:
+        JuxuSettingsGroup: $(AppIdentifierPrefix)com.hcyue.juxu.settings
         PrisWubiSettingsGroup: $(AppIdentifierPrefix)com.hcyue.priswubi.settings
-        CFBundleDisplayName: 形序
+        CFBundleDisplayName: 句序
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "8"
         UILaunchScreen: {}
@@ -54,11 +55,12 @@ targets:
       path: HostApp/PrisWubiApp.entitlements
       properties:
         keychain-access-groups:
+          - $(AppIdentifierPrefix)com.hcyue.juxu.settings
           - $(AppIdentifierPrefix)com.hcyue.priswubi.settings
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.priswubi
-        PRODUCT_NAME: PrisWubiApp
+        PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.juxu
+        PRODUCT_NAME: JuxuApp
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     preBuildScripts:
@@ -87,8 +89,9 @@ targets:
     info:
       path: KeyboardExtension/Info.plist
       properties:
+        JuxuSettingsGroup: $(AppIdentifierPrefix)com.hcyue.juxu.settings
         PrisWubiSettingsGroup: $(AppIdentifierPrefix)com.hcyue.priswubi.settings
-        CFBundleDisplayName: 形序
+        CFBundleDisplayName: 句序
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "8"
         NSExtension:
@@ -103,11 +106,12 @@ targets:
       path: KeyboardExtension/PrisWubiKeyboard.entitlements
       properties:
         keychain-access-groups:
+          - $(AppIdentifierPrefix)com.hcyue.juxu.settings
           - $(AppIdentifierPrefix)com.hcyue.priswubi.settings
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.priswubi.keyboard
-        PRODUCT_NAME: PrisWubiKeyboard
+        PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.juxu.keyboard
+        PRODUCT_NAME: JuxuKeyboard
         APPLICATION_EXTENSION_API_ONLY: YES
         TARGETED_DEVICE_FAMILY: "1,2"
     preBuildScripts:
@@ -128,7 +132,7 @@ targets:
       - target: PrisWubiApp
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.priswubi.uitests
+        PRODUCT_BUNDLE_IDENTIFIER: com.hcyue.juxu.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: PrisWubiApp
 

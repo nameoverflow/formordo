@@ -1,12 +1,12 @@
 import AppKit
 import InputMethodKit
 
-final class PrisWubiAppDelegate: NSObject, NSApplicationDelegate {
+final class JuxuAppDelegate: NSObject, NSApplicationDelegate {
     private var imkServer: IMKServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let bundle = Bundle.main
-        let bundleId = bundle.bundleIdentifier ?? "com.priswubi.inputmethod.PrisWubi"
+        let bundleId = bundle.bundleIdentifier ?? "com.hcyue.juxu.inputmethod"
 
         // On macOS 27+, `+[IMKServer connectionNameFor:]` enforces `<bundleIdentifier>.Connection`
         // for all third-party input methods (rejecting custom names in IMKInputSession_Modern).
@@ -38,6 +38,6 @@ final class PrisWubiAppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let app = NSApplication.shared
-let delegate = PrisWubiAppDelegate()
+let delegate = JuxuAppDelegate()
 app.delegate = delegate
 app.run()

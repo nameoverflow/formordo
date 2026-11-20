@@ -15,6 +15,7 @@ void wubi_engine_free(WubiEngineHandle *handle);
 void wubi_string_free(char *ptr);
 
 bool wubi_engine_load_dict_mmap(WubiEngineHandle *handle, uint32_t schema_id, const char *path);
+bool wubi_engine_load_pinyin_dict_mmap(WubiEngineHandle *handle, const char *path);
 bool wubi_engine_load_aux_mmap(WubiEngineHandle *handle, const char *path);
 
 bool wubi_engine_load_config(WubiEngineHandle *handle, const char *path);

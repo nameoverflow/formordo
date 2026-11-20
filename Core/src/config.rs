@@ -8,13 +8,19 @@ pub enum WubiSchema {
     Wubi86 = 86,
     Wubi98 = 98,
     Wubi06 = 6,
+    Xiaohe = 10,
+    Pinyin = 20,
 }
+
+pub type InputSchema = WubiSchema;
 
 impl WubiSchema {
     pub fn from_id(id: u32) -> Self {
         match id {
             98 => Self::Wubi98,
             6 | 2006 => Self::Wubi06,
+            10 => Self::Xiaohe,
+            20 => Self::Pinyin,
             _ => Self::Wubi86,
         }
     }
@@ -23,6 +29,8 @@ impl WubiSchema {
         match s.trim().to_ascii_lowercase().as_str() {
             "98" | "wubi98" => Self::Wubi98,
             "06" | "2006" | "wubi06" | "new_century" | "xinshiji" => Self::Wubi06,
+            "10" | "xiaohe" | "flypy" | "xh" => Self::Xiaohe,
+            "20" | "pinyin" | "quanpin" | "qp" => Self::Pinyin,
             _ => Self::Wubi86,
         }
     }
@@ -32,6 +40,8 @@ impl WubiSchema {
             Self::Wubi86 => "86",
             Self::Wubi98 => "98",
             Self::Wubi06 => "06",
+            Self::Xiaohe => "xiaohe",
+            Self::Pinyin => "pinyin",
         }
     }
 
@@ -40,6 +50,8 @@ impl WubiSchema {
             Self::Wubi86 => "86版五笔",
             Self::Wubi98 => "98版五笔",
             Self::Wubi06 => "新世纪五笔",
+            Self::Xiaohe => "小鹤音形",
+            Self::Pinyin => "全拼",
         }
     }
 
@@ -48,7 +60,29 @@ impl WubiSchema {
             Self::Wubi86 => 0,
             Self::Wubi98 => 1,
             Self::Wubi06 => 2,
+            Self::Xiaohe => 3,
+            Self::Pinyin => 4,
         }
+    }
+
+    #[inline]
+    pub fn is_wubi(self) -> bool {
+        matches!(self, Self::Wubi86 | Self::Wubi98 | Self::Wubi06)
+    }
+
+    #[inline]
+    pub fn is_xiaohe(self) -> bool {
+        matches!(self, Self::Xiaohe)
+    }
+
+    #[inline]
+    pub fn is_pinyin(self) -> bool {
+        matches!(self, Self::Pinyin)
+    }
+
+    #[inline]
+    pub fn allows_z_code(self) -> bool {
+        !self.is_wubi()
     }
 }
 
@@ -189,6 +223,8 @@ pub struct WubiConfig {
     pub auto_space_digits: bool,
     /// 扩展生僻大字集开关
     pub enable_rare_charset: bool,
+    /// 全拼声母简拼开关（如 srf -> 输入法）
+    pub pinyin_initial_abbr: bool,
     /// Shift 中英切换策略
     pub shift_toggle_mode: ShiftToggleMode,
     /// 每页候选词个数 (3..=9)
@@ -220,6 +256,7 @@ impl Default for WubiConfig {
             auto_space_zh_en: true,
             auto_space_digits: true,
             enable_rare_charset: false,
+            pinyin_initial_abbr: true,
             shift_toggle_mode: ShiftToggleMode::CommitCode,
             page_size: 5,
             orientation: CandidateOrientation::Horizontal,
@@ -232,10 +269,10 @@ impl WubiConfig {
     pub fn to_toml_string(&self) -> String {
         format!(
             concat!(
-                "# 棱五笔 (PrisWubi) 配置文件 — macOS 与 iOS 通用内核\n",
+                "# 句序 (Juxu) 配置文件 — macOS 与 iOS 通用内核\n",
                 "# 修改保存后将实时生效\n\n",
                 "[general]\n",
-                "# 五笔版本: \"86\" | \"98\" | \"06\" (新世纪)\n",
+                "# 输入方案: \"86\" | \"98\" | \"06\" (新世纪) | \"xiaohe\" (小鹤音形) | \"pinyin\" (全拼)\n",
                 "schema = \"{}\"\n",
                 "page_size = {}\n",
                 "# 候选栏方向: \"horizontal\" | \"vertical\"\n",
@@ -260,7 +297,8 @@ impl WubiConfig {
                 "auto_phrase = {}\n",
                 "auto_phrase_threshold = {}\n",
                 "z_omnipotent = {}\n",
-                "enable_rare_charset = {}\n\n",
+                "enable_rare_charset = {}\n",
+                "pinyin_initial_abbr = {}\n\n",
                 "[typo_correction]\n",
                 "enabled = {}\n",
                 "touch_hitbox_adapt = {}\n",
@@ -290,6 +328,7 @@ impl WubiConfig {
             self.auto_phrase_threshold,
             self.z_omnipotent,
             self.enable_rare_charset,
+            self.pinyin_initial_abbr,
             self.typo.enabled,
             self.typo.touch_hitbox_adapt,
             self.typo.promote_threshold,
@@ -354,6 +393,7 @@ impl WubiConfig {
                 }
                 (_, "z_omnipotent") => cfg.z_omnipotent = parse_bool(val),
                 (_, "enable_rare_charset") => cfg.enable_rare_charset = parse_bool(val),
+                (_, "pinyin_initial_abbr") => cfg.pinyin_initial_abbr = parse_bool(val),
                 ("typo_correction", "enabled") | (_, "typo_enabled") => {
                     cfg.typo.enabled = parse_bool(val)
                 }

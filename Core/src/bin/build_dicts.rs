@@ -7,6 +7,7 @@ use wubi_core::format::{
     pack_trigram, serialize_wbaux, serialize_wbdict, AuxBuildInput, CharMeta, DictBuildInput,
     ENTRY_FLAG_EXT_RARE, ENTRY_FLAG_SINGLE_CHAR, ENTRY_FLAG_SYMBOL,
 };
+use wubi_core::pinyin_dict::{serialize_pydict, PinyinDictBuildInput, PY_FLAG_EXT_RARE};
 
 fn strip_pinyin_tone(toned: &str) -> (String, Option<String>) {
     let mut primary = String::with_capacity(toned.len());
@@ -567,6 +568,30 @@ fn main() {
         }
     }
 
+    if !aux_only {
+        let flypy_dir = raw_dir.join("flypy");
+        if flypy_dir.exists() {
+            let xh_blob = build_xiaohe_dict(&flypy_dir, &tghz_set, &global_char_weights);
+            let out_path = out_dir.join("xiaohe.wbdict");
+            fs::write(&out_path, &xh_blob).expect("failed to write xiaohe.wbdict");
+            println!(
+                "Built xiaohe.wbdict ({:.2} MB)",
+                xh_blob.len() as f64 / (1024.0 * 1024.0)
+            );
+        }
+
+        let ice_dir = raw_dir.join("pinyin_ice");
+        if ice_dir.exists() {
+            let py_blob = build_pinyin_dict(&ice_dir, &tghz_set);
+            let out_path = out_dir.join("pinyin.pydict");
+            fs::write(&out_path, &py_blob).expect("failed to write pinyin.pydict");
+            println!(
+                "Built pinyin.pydict ({:.2} MB)",
+                py_blob.len() as f64 / (1024.0 * 1024.0)
+            );
+        }
+    }
+
     let aux_input = build_aux_data(
         &pinyin_dir,
         &global_char_weights,
@@ -588,4 +613,271 @@ fn main() {
         bg_cnt,
         tri_cnt
     );
+}
+
+fn build_xiaohe_dict(
+    flypy_dir: &Path,
+    tghz_set: &HashSet<u32>,
+    global_char_weights: &HashMap<u32, u64>,
+) -> Vec<u8> {
+    let files: &[(&str, u32)] = &[
+        ("flypy.primary.dict.yaml", 3_000_000_000),
+        ("flypy.secondary.short.code.dict.yaml", 2_000_000_000),
+        ("flypy.secondary.dict.yaml", 1_500_000_000),
+        ("flypy.full.char.dict.yaml", 500_000_000),
+        ("flypy.full.dict.yaml", 100_000_000),
+    ];
+
+    let mut entries: Vec<(PackedCode, String, u32, u16)> = Vec::new();
+    let mut char_shortest: HashMap<u32, (PackedCode, u32)> = HashMap::new();
+    let mut char_full: HashMap<u32, (PackedCode, u32)> = HashMap::new();
+
+    for &(fname, base_wt) in files {
+        let path = flypy_dir.join(fname);
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut in_body = false;
+        let mut per_code_seen: HashMap<PackedCode, u32> = HashMap::new();
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if !in_body {
+                if line == "..." {
+                    in_body = true;
+                }
+                continue;
+            }
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut parts = line.split('\t');
+            let Some(text) = parts.next().map(str::trim) else {
+                continue;
+            };
+            let Some(code_str) = parts.next().map(str::trim) else {
+                continue;
+            };
+            if text.is_empty() || code_str.is_empty() || code_str.len() > 4 {
+                continue;
+            }
+            if !code_str.bytes().all(|b| b.is_ascii_lowercase()) {
+                continue;
+            }
+            let Some(pcode) = PackedCode::from_ascii(code_str) else {
+                continue;
+            };
+            let seen_idx = per_code_seen.entry(pcode).or_insert(0);
+            let order_wt = base_wt.saturating_sub((*seen_idx).saturating_mul(100));
+            *seen_idx += 1;
+
+            let is_single = text.chars().count() == 1;
+            let mut flags = 0u16;
+            let mut final_wt = order_wt;
+            if is_single {
+                flags |= ENTRY_FLAG_SINGLE_CHAR;
+                let cp = text.chars().next().unwrap() as u32;
+                if !tghz_set.contains(&cp) {
+                    flags |= ENTRY_FLAG_EXT_RARE;
+                }
+                if let Some(&gw) = global_char_weights.get(&cp) {
+                    if fname == "flypy.full.char.dict.yaml" {
+                        final_wt = base_wt.saturating_add((gw / 1000).min(400_000_000) as u32);
+                    }
+                }
+                char_shortest
+                    .entry(cp)
+                    .and_modify(|prev| {
+                        if code_str.len() < prev.0.len()
+                            || (code_str.len() == prev.0.len() && final_wt > prev.1)
+                        {
+                            *prev = (pcode, final_wt);
+                        }
+                    })
+                    .or_insert((pcode, final_wt));
+                char_full
+                    .entry(cp)
+                    .and_modify(|prev| {
+                        if code_str.len() > prev.0.len()
+                            || (code_str.len() == prev.0.len() && final_wt > prev.1)
+                        {
+                            *prev = (pcode, final_wt);
+                        }
+                    })
+                    .or_insert((pcode, final_wt));
+            }
+            entries.push((pcode, text.to_string(), final_wt, flags));
+        }
+    }
+
+    let mut char_metas = Vec::with_capacity(char_full.len());
+    for (cp, (full_code, _)) in &char_full {
+        let shortest_code = char_shortest.get(cp).map(|x| x.0).unwrap_or(*full_code);
+        let (buf, n) = full_code.to_bytes_buf();
+        let stem2 = Stem2::from_bytes(&buf[..n.min(2)]).unwrap_or_default();
+        char_metas.push(CharMeta {
+            codepoint: *cp,
+            stem2,
+            flags: if tghz_set.contains(cp) {
+                0
+            } else {
+                ENTRY_FLAG_EXT_RARE
+            },
+            shortest_code,
+            primary_short_code: PackedCode::EMPTY,
+            full_code: *full_code,
+        });
+    }
+
+    serialize_wbdict(DictBuildInput {
+        schema_id: 10,
+        entries,
+        char_metas,
+    })
+}
+
+fn build_pinyin_dict(ice_dir: &Path, tghz_set: &HashSet<u32>) -> Vec<u8> {
+    let mut chars: Vec<(String, String, u32, u16)> = Vec::new();
+    let mut primary_syl: HashMap<char, (String, u32)> = HashMap::new();
+
+    for (fname, is_rare_file) in [("8105.dict.yaml", false), ("41448.dict.yaml", true)] {
+        let path = ice_dir.join(fname);
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut in_body = false;
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if !in_body {
+                if line == "..." {
+                    in_body = true;
+                }
+                continue;
+            }
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let text = parts[0].trim();
+            let syl = parts[1].trim();
+            if text.chars().count() != 1 || syl.is_empty() || syl.len() > 7 {
+                continue;
+            }
+            if !syl.bytes().all(|b| b.is_ascii_lowercase()) {
+                continue;
+            }
+            let wt = parts
+                .get(2)
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(1)
+                .min(u32::MAX as u64) as u32;
+            let ch = text.chars().next().unwrap();
+            let flags = if is_rare_file && !tghz_set.contains(&(ch as u32)) {
+                PY_FLAG_EXT_RARE
+            } else {
+                0
+            };
+            chars.push((syl.to_string(), text.to_string(), wt, flags));
+            primary_syl
+                .entry(ch)
+                .and_modify(|prev| {
+                    if wt > prev.1 {
+                        *prev = (syl.to_string(), wt);
+                    }
+                })
+                .or_insert_with(|| (syl.to_string(), wt));
+        }
+    }
+
+    let mut phrases: Vec<(Vec<String>, String, u32, u16)> = Vec::new();
+    for fname in ["base.dict.yaml", "ext.dict.yaml", "others.dict.yaml"] {
+        let path = ice_dir.join(fname);
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut in_body = false;
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if !in_body {
+                if line == "..." {
+                    in_body = true;
+                }
+                continue;
+            }
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let text = parts[0].trim();
+            let syl_str = parts[1].trim();
+            let wt = parts
+                .get(2)
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(10)
+                .min(u32::MAX as u64) as u32;
+            let syls: Vec<String> = syl_str
+                .split_whitespace()
+                .map(|s| s.to_ascii_lowercase())
+                .collect();
+            if syls.len() < 2 || syls.len() > 6 || text.chars().count() != syls.len() {
+                continue;
+            }
+            if !syls
+                .iter()
+                .all(|s| !s.is_empty() && s.len() <= 7 && s.bytes().all(|b| b.is_ascii_lowercase()))
+            {
+                continue;
+            }
+            phrases.push((syls, text.to_string(), wt, 0));
+        }
+    }
+
+    // Auto-annotate `tencent.dict.yaml` using `primary_syl`
+    let tencent_path = ice_dir.join("tencent.dict.yaml");
+    if let Ok(content) = fs::read_to_string(&tencent_path) {
+        let mut in_body = false;
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if !in_body {
+                if line == "..." {
+                    in_body = true;
+                }
+                continue;
+            }
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split('\t').collect();
+            let text = parts[0].trim();
+            let char_cnt = text.chars().count();
+            if !(2..=6).contains(&char_cnt) {
+                continue;
+            }
+            let wt = parts
+                .get(1)
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .unwrap_or(1)
+                .min(u32::MAX as u64) as u32;
+            let mut syls = Vec::with_capacity(char_cnt);
+            let mut ok = true;
+            for ch in text.chars() {
+                if let Some((s, _)) = primary_syl.get(&ch) {
+                    syls.push(s.clone());
+                } else {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                phrases.push((syls, text.to_string(), wt, 0));
+            }
+        }
+    }
+
+    serialize_pydict(PinyinDictBuildInput { chars, phrases })
 }

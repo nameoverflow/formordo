@@ -1,6 +1,7 @@
 use crate::config::{WubiConfig, WubiSchema};
 use crate::engine::{EngineOutput, WubiEngine};
 use crate::format::{AuxView, DictView};
+use crate::pinyin_dict::PinyinDictView;
 use crate::user_data::{TouchKeyOffset, UserStore, MAX_TOUCH_OFFSET};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -174,6 +175,26 @@ pub extern "C" fn wubi_engine_load_aux_mmap(
     match AuxView::open_mmap(p) {
         Ok(aux) => {
             h.inner.set_aux(aux);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wubi_engine_load_pinyin_dict_mmap(
+    handle: *mut WubiEngineHandle,
+    path: *const c_char,
+) -> bool {
+    let Some(h) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    let Some(p) = cstr_to_str(path) else {
+        return false;
+    };
+    match PinyinDictView::from_file(p) {
+        Ok(dict) => {
+            h.inner.load_pinyin_dict(dict);
             true
         }
         Err(_) => false,

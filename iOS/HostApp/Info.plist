@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>形序</string>
+	<string>句序</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -20,6 +20,8 @@
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
 	<string>8</string>
+	<key>JuxuSettingsGroup</key>
+	<string>$(AppIdentifierPrefix)com.hcyue.juxu.settings</string>
 	<key>PrisWubiSettingsGroup</key>
 	<string>$(AppIdentifierPrefix)com.hcyue.priswubi.settings</string>
 	<key>UIApplicationSceneManifest</key>

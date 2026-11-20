@@ -231,12 +231,17 @@ public struct IOSHostRootView: View {
                 VStack(spacing: 14) {
                     // 1-Tap Schema Switcher Cards
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("五笔方案快速切换")
+                        Text("输入方案快速切换")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.secondary)
 
                         HStack(spacing: 8) {
-                            compactSchemaButton(id: 86, name: "86 版", tag: "经典")
+                            compactSchemaButton(id: 20, name: "全拼", tag: "整句简拼")
+                            compactSchemaButton(id: 10, name: "小鹤音形", tag: "双拼+鹤形")
+                        }
+
+                        HStack(spacing: 8) {
+                            compactSchemaButton(id: 86, name: "86 版", tag: "经典五笔")
                             compactSchemaButton(id: 98, name: "98 版", tag: "规范码元")
                             compactSchemaButton(id: 6, name: "新世纪", tag: "06 国标")
                         }

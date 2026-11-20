@@ -2,8 +2,14 @@ use crate::code::{expand_wildcards, PackedCode};
 use crate::config::{FourthEmptyBehavior, ShiftToggleMode, WubiConfig, WubiSchema};
 use crate::format::{AuxView, DictView, ENTRY_FLAG_SYMBOL};
 use crate::neural::{NeuralContextTracker, NeuralView, RwkvState};
+use crate::pinyin::{
+    pinyin_next_key_priors, PinyinCandidate, PinyinDecoder, PinyinPath, PinyinStream,
+};
+use crate::pinyin_dict::PinyinDictView;
 use crate::spaceless::{Decoder, Segment, Stream};
-use crate::typo::{generate_hypotheses, softmax_confidences, CorrectionKind, KeyLayout, KeyObs};
+use crate::typo::{
+    generate_hypotheses_with_options, softmax_confidences, CorrectionKind, KeyLayout, KeyObs,
+};
 use crate::user_data::UserStore;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -109,7 +115,8 @@ impl Default for LmWeights {
 }
 
 pub struct WubiEngine {
-    pub dicts: [Option<DictView>; 3],
+    pub dicts: [Option<DictView>; 4],
+    pub pinyin_dict: Option<PinyinDictView>,
     pub aux: Option<AuxView>,
     pub config: WubiConfig,
     pub user: UserStore,
@@ -120,6 +127,9 @@ pub struct WubiEngine {
     pub ascii_mode: bool,
     raw_code: String,
     stream: Stream,
+    pinyin_stream: PinyinStream,
+    pinyin_candidates: Vec<PinyinCandidate>,
+    pinyin_paths: Vec<PinyinPath>,
     committed_stream_codes: VecDeque<String>,
     observations: Vec<KeyObs>,
     candidates: Vec<Candidate>,
@@ -148,7 +158,8 @@ impl Default for WubiEngine {
 impl WubiEngine {
     pub fn new(config: WubiConfig) -> Self {
         Self {
-            dicts: [None, None, None],
+            dicts: [None, None, None, None],
+            pinyin_dict: None,
             aux: None,
             config,
             user: UserStore::default(),
@@ -158,6 +169,9 @@ impl WubiEngine {
             ascii_mode: false,
             raw_code: String::new(),
             stream: Stream::default(),
+            pinyin_stream: PinyinStream::default(),
+            pinyin_candidates: Vec::new(),
+            pinyin_paths: Vec::new(),
             committed_stream_codes: VecDeque::new(),
             observations: Vec::new(),
             candidates: Vec::new(),
@@ -664,6 +678,9 @@ impl WubiEngine {
 
     pub fn load_dict(&mut self, schema: WubiSchema, dict: DictView) {
         let slot = schema.slot_index();
+        if slot >= self.dicts.len() {
+            return;
+        }
         self.dicts[slot] = Some(dict);
         if self.config.schema == schema {
             if let Some(ref d) = self.dicts[slot] {
@@ -672,6 +689,13 @@ impl WubiEngine {
             if !self.raw_code.is_empty() {
                 self.rebuild_candidates();
             }
+        }
+    }
+
+    pub fn load_pinyin_dict(&mut self, dict: PinyinDictView) {
+        self.pinyin_dict = Some(dict);
+        if self.config.schema.is_pinyin() && !self.raw_code.is_empty() {
+            self.rebuild_candidates();
         }
     }
 
@@ -690,7 +714,8 @@ impl WubiEngine {
     }
 
     pub fn active_dict(&self) -> Option<&DictView> {
-        self.dicts[self.config.schema.slot_index()].as_ref()
+        let slot = self.config.schema.slot_index();
+        self.dicts.get(slot).and_then(|d| d.as_ref())
     }
 
     pub fn set_config(&mut self, new_config: WubiConfig) {
@@ -699,11 +724,11 @@ impl WubiEngine {
         self.config = new_config;
         if schema_changed {
             let slot = self.config.schema.slot_index();
-            if let Some(ref d) = self.dicts[slot] {
+            if let Some(Some(ref d)) = self.dicts.get(slot) {
                 self.user.reindex_phrases(d);
             }
         }
-        if mode_changed {
+        if mode_changed || schema_changed {
             self.clear_composition();
         } else if !self.raw_code.is_empty() {
             self.rebuild_candidates();
@@ -714,7 +739,7 @@ impl WubiEngine {
         if self.config.schema != schema {
             self.config.schema = schema;
             let slot = self.config.schema.slot_index();
-            if let Some(ref d) = self.dicts[slot] {
+            if let Some(Some(ref d)) = self.dicts.get(slot) {
                 self.user.reindex_phrases(d);
             }
             self.clear_composition();
@@ -727,7 +752,11 @@ impl WubiEngine {
     }
 
     pub fn preedit(&self) -> String {
-        if self.uses_spaceless() {
+        if self.is_pinyin_mode() {
+            self.pinyin_paths
+                .first()
+                .map_or_else(|| self.raw_code.clone(), |p| p.text.clone())
+        } else if self.uses_spaceless() {
             self.stream.preview(&self.raw_code)
         } else {
             self.raw_code.clone()
@@ -735,6 +764,12 @@ impl WubiEngine {
     }
 
     pub fn segmented_code(&self) -> String {
+        if self.is_pinyin_mode() && self.is_composing() {
+            return self
+                .pinyin_paths
+                .first()
+                .map_or_else(|| self.raw_code.clone(), |p| p.segmented_code(&self.raw_code));
+        }
         if !self.uses_spaceless() || !self.is_composing() {
             return String::new();
         }
@@ -747,11 +782,19 @@ impl WubiEngine {
         }
     }
 
+    #[inline]
+    fn is_pinyin_mode(&self) -> bool {
+        self.config.schema.is_pinyin() && self.pinyin_dict.is_some()
+    }
+
     fn uses_spaceless(&self) -> bool {
-        self.config.spaceless
+        !self.config.schema.is_pinyin()
+            && self.config.spaceless
             && self.active_dict().is_some()
             && self.aux.as_ref().is_some_and(AuxView::has_neural)
-            && !(self.config.z_omnipotent && self.raw_code.starts_with('z'))
+            && !(self.config.schema.is_wubi()
+                && self.config.z_omnipotent
+                && self.raw_code.starts_with('z'))
     }
 
     #[inline]
@@ -792,6 +835,9 @@ impl WubiEngine {
     pub fn clear_composition(&mut self) {
         self.raw_code.clear();
         self.stream = Stream::default();
+        self.pinyin_stream.clear();
+        self.pinyin_candidates.clear();
+        self.pinyin_paths.clear();
         self.committed_stream_codes.clear();
         self.observations.clear();
         self.candidates.clear();
@@ -849,6 +895,70 @@ impl WubiEngine {
         timestamp_ms: u64,
         explicit: bool,
     ) -> Option<EngineOutput> {
+        if self.is_pinyin_mode() {
+            let pc = self.pinyin_candidates.get(abs_idx)?;
+            let commit_text = pc.candidate.text.clone();
+            let consumed = pc.consumed_keys.min(self.observations.len());
+            let learn = self.config.dynamic_word_freq && (explicit || pc.candidate.is_exact);
+            let first_choice = (learn && explicit && abs_idx > 0)
+                .then(|| self.candidates.first().map(|c| c.text.clone()))
+                .flatten();
+            if learn {
+                self.learn_continuation(&commit_text, explicit, first_choice.as_deref());
+            }
+            self.last_committed = commit_text.clone();
+            let mut all_cjk = !commit_text.is_empty();
+            for ch in commit_text.chars() {
+                if is_cjk_char(ch) {
+                    self.recent_context.push(ch);
+                } else {
+                    self.recent_context.clear();
+                    all_cjk = false;
+                }
+            }
+            if let Some(nv) = self.aux.as_ref().and_then(|a| a.neural_view()) {
+                if all_cjk {
+                    self.neural_tracker.commit_cjk_str(&nv, &commit_text);
+                } else {
+                    self.neural_tracker.reset_to_bos(Some(&nv));
+                }
+            }
+            if self.recent_context.len() > 8 {
+                let drain_n = self.recent_context.len() - 8;
+                self.recent_context.drain(..drain_n);
+            }
+            if self.config.typo.enabled && self.config.typo.touch_hitbox_adapt {
+                for obs in self.observations.iter().take(consumed) {
+                    if obs.has_touch && obs.ch.is_ascii_lowercase() {
+                        let (cx, cy) = self.key_layout.center_of(obs.ch);
+                        self.user
+                            .touch_profile
+                            .observe(obs.ch, obs.norm_x - cx, obs.norm_y - cy);
+                    }
+                }
+            }
+            if consumed > 0 && consumed < self.observations.len() {
+                self.raw_code.drain(..consumed);
+                self.observations.drain(..consumed);
+                self.page = 0;
+                self.rebuild_pinyin_candidates();
+                return Some(EngineOutput {
+                    consumed: true,
+                    commit_text,
+                    preedit: self.preedit(),
+                    bell: false,
+                    notice: String::new(),
+                });
+            }
+            self.clear_composition();
+            return Some(EngineOutput {
+                consumed: true,
+                commit_text,
+                preedit: String::new(),
+                bell: false,
+                notice: String::new(),
+            });
+        }
         let cand = self.candidates.get(abs_idx)?.clone();
         let learn = self.config.dynamic_word_freq && (explicit || cand.is_exact);
         let first_choice =
@@ -917,11 +1027,24 @@ impl WubiEngine {
     /// Used by iOS touch hit-testing to dynamically expand valid next-key boundaries.
     pub fn valid_next_mask(&self) -> u32 {
         const ALL_26: u32 = 0x03FF_FFFF;
-        if self.ascii_mode || self.uses_spaceless() {
+        if self.ascii_mode {
+            return ALL_26;
+        }
+        if self.is_pinyin_mode() {
+            if let Some(ref pdict) = self.pinyin_dict {
+                let (mask, _) = pinyin_next_key_priors(&self.raw_code, pdict);
+                return if mask == 0 { ALL_26 } else { mask };
+            }
+            return ALL_26;
+        }
+        if self.uses_spaceless() {
             return ALL_26;
         }
         let bytes = self.raw_code.as_bytes();
-        if bytes.is_empty() || bytes.len() >= 4 || bytes.contains(&b'z') {
+        if bytes.is_empty()
+            || bytes.len() >= 4
+            || (self.config.schema.is_wubi() && bytes.contains(&b'z'))
+        {
             return ALL_26;
         }
         let mut mask = self.user.valid_next_letters_mask(bytes);
@@ -932,7 +1055,7 @@ impl WubiEngine {
         if mask == 0 {
             return ALL_26;
         }
-        if self.config.z_omnipotent {
+        if self.config.schema.is_wubi() && self.config.z_omnipotent {
             mask |= 1u32 << 25;
         }
         mask
@@ -943,11 +1066,21 @@ impl WubiEngine {
     /// Powers Key #1 predictive gutter bias AND Keys #2..#4 valid-vs-valid gutter disambiguation!
     pub fn next_key_priors(&self) -> [u8; 26] {
         let mut out = [100u8; 26];
-        if self.ascii_mode || !self.config.typo.enabled || self.uses_spaceless() {
+        if self.ascii_mode || !self.config.typo.enabled {
+            return out;
+        }
+        if self.is_pinyin_mode() {
+            if let Some(ref pdict) = self.pinyin_dict {
+                let (_, priors) = pinyin_next_key_priors(&self.raw_code, pdict);
+                return priors;
+            }
+            return out;
+        }
+        if self.uses_spaceless() {
             return out;
         }
         let bytes = self.raw_code.as_bytes();
-        if bytes.len() >= 4 || bytes.contains(&b'z') {
+        if bytes.len() >= 4 || (self.config.schema.is_wubi() && bytes.contains(&b'z')) {
             return out;
         }
 
@@ -1198,9 +1331,14 @@ impl WubiEngine {
             return EngineOutput::default();
         };
 
-        // Lowercase letter 'a'..='z': core Wubi composition!
+        // Lowercase letter 'a'..='z': core composition!
         if c.is_ascii_lowercase() {
             let obs = KeyObs::physical(c as u8, timestamp_ms);
+            return self.push_code_observation(obs);
+        }
+        // Apostrophe syllable separator in Full Pinyin (e.g. xi'an)
+        if c == '\'' && self.is_pinyin_mode() && !self.raw_code.is_empty() {
+            let obs = KeyObs::physical(b'\'', timestamp_ms);
             return self.push_code_observation(obs);
         }
 
@@ -1308,10 +1446,21 @@ impl WubiEngine {
     }
 
     fn push_code_observation(&mut self, obs: KeyObs) -> EngineOutput {
+        if self.is_pinyin_mode() {
+            self.raw_code.push(obs.ch as char);
+            self.observations.push(obs);
+            self.page = 0;
+            self.rebuild_pinyin_candidates();
+            return EngineOutput {
+                consumed: true,
+                preedit: self.preedit(),
+                ..Default::default()
+            };
+        }
         let mut commit_prefix = String::new();
         let mut notice = String::new();
         if self.uses_spaceless() && obs.ch.is_ascii_lowercase() {
-            if obs.ch != b'z' || !self.config.z_omnipotent {
+            if obs.ch != b'z' || !self.config.z_omnipotent || !self.config.schema.is_wubi() {
                 return self.push_spaceless(obs);
             }
             if self.is_composing() {
@@ -1321,7 +1470,8 @@ impl WubiEngine {
             }
         }
 
-        let is_z_pinyin_mode = self.config.z_omnipotent
+        let is_z_pinyin_mode = self.config.schema.is_wubi()
+            && self.config.z_omnipotent
             && self.raw_code.starts_with('z')
             && !self.raw_code.starts_with("zz");
         let max_len = if is_z_pinyin_mode { 7 } else { 4 };
@@ -1691,6 +1841,7 @@ impl WubiEngine {
 
         // 2. Update personal history & consecutive auto-phrase learning
         let dict_idx = self.config.schema.slot_index();
+        let dict_opt = self.dicts.get(dict_idx).and_then(|d| d.as_ref());
         let prev = self.last_committed.clone();
         let learned = self.user.record_commit(
             &prev,
@@ -1698,10 +1849,10 @@ impl WubiEngine {
             timestamp_ms,
             self.config.auto_phrase,
             self.config.auto_phrase_threshold,
-            self.dicts[dict_idx].as_ref(),
+            dict_opt,
         );
         if let Some(new_word) = learned {
-            if let Some(ref d) = self.dicts[dict_idx] {
+            if let Some(d) = dict_opt {
                 if let Some(c) = d.encode_phrase(&new_word) {
                     *notice = format!("自动成词：{} ({})", new_word, c.as_string());
                 }
@@ -1788,8 +1939,47 @@ impl WubiEngine {
     // Candidate Assembly & Bayesian Spatial + N-gram Ranking
     // ========================================================================
 
+    fn rebuild_pinyin_candidates(&mut self) {
+        self.candidates.clear();
+        self.pinyin_candidates.clear();
+        self.pinyin_paths.clear();
+        let Some(ref pdict) = self.pinyin_dict else {
+            return;
+        };
+        if self.raw_code.is_empty() {
+            return;
+        }
+        let nv = self.aux.as_ref().and_then(|a| a.neural_view());
+        let initial_state = if let Some(ref model) = nv {
+            let _ = model;
+            self.neural_tracker.active.clone()
+        } else {
+            RwkvState::default()
+        };
+        let decoder = PinyinDecoder {
+            dict: pdict,
+            aux: self.aux.as_ref(),
+            model: nv,
+            config: &self.config,
+            user: &self.user,
+            context: &self.recent_context,
+            layout: &self.key_layout,
+        };
+        let (cands, paths) = self.pinyin_stream.update_and_decode(
+            &self.observations,
+            &self.raw_code,
+            &decoder,
+            &initial_state,
+        );
+        self.candidates = cands.iter().map(|pc| pc.candidate.clone()).collect();
+        self.pinyin_candidates = cands;
+        self.pinyin_paths = paths;
+    }
+
     pub fn rebuild_candidates(&mut self) {
         self.candidates.clear();
+        self.pinyin_candidates.clear();
+        self.pinyin_paths.clear();
         self.stream = Stream::default();
         self.hold_fourth_for_split = false;
         self.pending_empty_split = None;
@@ -1797,8 +1987,12 @@ impl WubiEngine {
         if self.raw_code.is_empty() {
             return;
         }
+        if self.is_pinyin_mode() {
+            self.rebuild_pinyin_candidates();
+            return;
+        }
         let slot = self.config.schema.slot_index();
-        if self.dicts[slot].is_none() {
+        if slot >= self.dicts.len() || self.dicts[slot].is_none() {
             return;
         }
         if self.uses_spaceless() {
@@ -1807,19 +2001,25 @@ impl WubiEngine {
             return;
         }
 
-        // Branch 1: `z` omnipotent mode (z-prompt, zz-symbols, z+pinyin reverse lookup)
-        if self.config.z_omnipotent && self.raw_code.starts_with('z') {
+        // Branch 1: `z` omnipotent mode (Wubi only: z-prompt, zz-symbols, z+pinyin reverse lookup)
+        if self.config.schema.is_wubi()
+            && self.config.z_omnipotent
+            && self.raw_code.starts_with('z')
+        {
             self.build_z_mode_candidates(slot);
             return;
         }
 
-        // Branch 2: `z` wildcard at positions 2..=4 (e.g. `khz`, `tznt`)
-        if self.config.z_omnipotent && self.raw_code.contains('z') {
+        // Branch 2: `z` wildcard at positions 2..=4 (Wubi only)
+        if self.config.schema.is_wubi()
+            && self.config.z_omnipotent
+            && self.raw_code.contains('z')
+        {
             self.build_wildcard_candidates(slot);
             return;
         }
 
-        // Branch 3: Standard Wubi 1..=4 letters + Bayesian Spatial/Lexical/History Typo Decoder
+        // Branch 3: Standard 1..=4 letters (Wubi or Xiaohe) + Bayesian Spatial/Lexical/History Typo Decoder
         self.build_standard_and_typo_candidates(slot);
     }
 
@@ -2187,11 +2387,12 @@ impl WubiEngine {
 
         let mut fuzzy_items = Vec::<FuzzyItem>::new();
         if self.config.typo.enabled && self.observations.len() >= 2 {
-            let hyps = generate_hypotheses(
+            let hyps = generate_hypotheses_with_options(
                 &self.observations,
                 &self.key_layout,
                 &self.user.touch_profile,
                 &self.config.typo,
+                self.config.schema.allows_z_code(),
             );
 
             let mut fuzzy_seen = HashSet::<String>::new();

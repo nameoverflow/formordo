@@ -6,6 +6,8 @@ pub mod format;
 pub mod mmap_buf;
 pub mod neural;
 mod personalization;
+pub mod pinyin;
+pub mod pinyin_dict;
 mod spaceless;
 pub mod typo;
 pub mod user_data;
@@ -571,5 +573,110 @@ mod tests {
         tracker.set_context_str(&nv, "我输");
         let sc = nv.score_next_char(&tracker.active, '入');
         println!("RUST_SCORE_RU={:.6}", sc);
+    }
+
+    #[test]
+    fn xiaohe_z_code_and_touch_typo_rescue() {
+        let entries = vec![
+            (
+                PackedCode::from_ascii("z").unwrap(),
+                "在".to_string(),
+                3_000_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("zn").unwrap(),
+                "真".to_string(),
+                2_000_000_000,
+                ENTRY_FLAG_SINGLE_CHAR,
+            ),
+            (
+                PackedCode::from_ascii("uuip").unwrap(),
+                "输入".to_string(),
+                500_000_000,
+                0,
+            ),
+        ];
+        let dict = DictView::from_bytes(serialize_wbdict(DictBuildInput {
+            schema_id: 10,
+            entries,
+            char_metas: vec![],
+        }))
+        .unwrap();
+
+        let mut cfg = WubiConfig::default();
+        cfg.schema = WubiSchema::Xiaohe;
+        let mut engine = WubiEngine::new(cfg);
+        engine.load_dict(WubiSchema::Xiaohe, dict);
+
+        // In Xiaohe, 'z' is a normal letter key (not Wubi omnipotent mode)!
+        let out_z = engine.handle_key_event(0, Some('z'), false, 100);
+        assert_eq!(out_z.preedit, "z");
+        assert_eq!(engine.page_candidates()[0].text, "在");
+        let out_n = engine.handle_key_event(0, Some('n'), false, 150);
+        assert_eq!(out_n.preedit, "zn");
+        assert_eq!(engine.page_candidates()[0].text, "真");
+
+        // Touch slip on 'z'->'x' for "zn" -> rescues "真" because allow_z is enabled for Xiaohe!
+        engine.clear_composition();
+        let _ = engine.push_touch_letter(b'x', 1.95, 2.0, true, 200);
+        let _ = engine.push_touch_letter(b'n', 6.5, 2.0, true, 250);
+        assert_eq!(engine.page_candidates()[0].text, "真");
+    }
+
+    #[test]
+    fn full_pinyin_sentence_abbr_apostrophe_and_typo() {
+        use crate::pinyin_dict::{serialize_pydict, PinyinDictBuildInput, PinyinDictView};
+        let py_bytes = serialize_pydict(PinyinDictBuildInput {
+            chars: vec![
+                ("wo".into(), "我".into(), 10000, 0),
+                ("men".into(), "们".into(), 9000, 0),
+                ("shu".into(), "输".into(), 8000, 0),
+                ("ru".into(), "入".into(), 8500, 0),
+                ("fa".into(), "法".into(), 9500, 0),
+                ("xi".into(), "西".into(), 8000, 0),
+                ("an".into(), "安".into(), 8200, 0),
+                ("xian".into(), "先".into(), 9000, 0),
+            ],
+            phrases: vec![
+                (vec!["wo".into(), "men".into()], "我们".into(), 50000, 0),
+                (vec!["shu".into(), "ru".into(), "fa".into()], "输入法".into(), 45000, 0),
+                (vec!["xi".into(), "an".into()], "西安".into(), 30000, 0),
+            ],
+        });
+        let pdict = PinyinDictView::from_bytes(py_bytes).unwrap();
+        let mut cfg = WubiConfig::default();
+        cfg.schema = WubiSchema::Pinyin;
+        let mut engine = WubiEngine::new(cfg);
+        engine.load_pinyin_dict(pdict);
+
+        // 1. Full sentence: "womenshurufa" -> "我们输入法"
+        for ch in "womenshurufa".chars() {
+            let _ = engine.handle_key_event(0, Some(ch), false, 100);
+        }
+        assert_eq!(engine.page_candidates()[0].text, "我们输入法");
+        engine.clear_composition();
+
+        // 2. Initial abbreviation: "srf" -> "输入法"
+        for ch in "srf".chars() {
+            let _ = engine.handle_key_event(0, Some(ch), false, 200);
+        }
+        assert_eq!(engine.page_candidates()[0].text, "输入法");
+        engine.clear_composition();
+
+        // 3. Apostrophe separator: "xi'an" -> "西安" (not "先")
+        for ch in "xi'an".chars() {
+            let _ = engine.handle_key_event(0, Some(ch), false, 300);
+        }
+        assert_eq!(engine.page_candidates()[0].text, "西安");
+        engine.clear_composition();
+
+        // 4. Touch typo rescue: "wpmen" (o->p neighbor) -> "我们"
+        let _ = engine.push_touch_letter(b'w', 1.0, 0.0, true, 400);
+        let _ = engine.push_touch_letter(b'p', 8.55, 0.0, true, 450); // near o/p border
+        for ch in "men".chars() {
+            let _ = engine.handle_key_event(0, Some(ch), false, 500);
+        }
+        assert_eq!(engine.page_candidates()[0].text, "我们");
     }
 }

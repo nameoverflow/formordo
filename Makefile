@@ -17,7 +17,7 @@ UI_SOURCES = Sources/WubiCoreBridge.swift Sources/CandidatePanel.swift Sources/S
 APP_SOURCES = $(UI_SOURCES) Sources/InputController.swift Sources/main.swift
 FRAMEWORKS = -framework Cocoa -framework SwiftUI -framework InputMethodKit -framework Carbon
 
-all: build/PrisWubi
+all: build/Juxu
 
 $(CORE_LIB): $(CORE_SOURCES)
 	cargo build --release --manifest-path Core/Cargo.toml
@@ -29,7 +29,7 @@ dicts: $(CORE_LIB)
 	  Core/target/release/build-dicts "$(RAW_TABLES_DIR)" Resources/Dicts; \
 	fi
 
-build/PrisWubi: $(APP_SOURCES) $(CORE_LIB) $(CORE_HEADER)
+build/Juxu: $(APP_SOURCES) $(CORE_LIB) $(CORE_HEADER)
 	mkdir -p build
 	swiftc -O $(MACOS_TARGET) $(APP_SOURCES) $(CORE_FLAGS) $(FRAMEWORKS) -o $@
 
@@ -43,33 +43,34 @@ build/AppIcon.icns build/menu_icon.pdf: Scripts/DrawAssets.swift
 	done
 	iconutil -c icns build/AppIcon.iconset -o build/AppIcon.icns
 
-app: build/PrisWubi Resources/Info.plist build/AppIcon.icns build/menu_icon.pdf
-	rm -rf build/PrisWubi.app
-	mkdir -p build/PrisWubi.app/Contents/MacOS \
-	         build/PrisWubi.app/Contents/Resources/Dicts \
-	         build/PrisWubi.app/Contents/Resources/zh-Hans.lproj
-	cp build/PrisWubi build/PrisWubi.app/Contents/MacOS/PrisWubi
-	cp Resources/Info.plist build/PrisWubi.app/Contents/Info.plist
-	cp Resources/zh-Hans.lproj/InfoPlist.strings build/PrisWubi.app/Contents/Resources/zh-Hans.lproj/InfoPlist.strings
-	cp build/AppIcon.icns build/PrisWubi.app/Contents/Resources/AppIcon.icns
-	cp build/menu_icon.pdf build/PrisWubi.app/Contents/Resources/menu_icon.pdf
-	cp Resources/Dicts/*.wbdict Resources/Dicts/*.wbaux build/PrisWubi.app/Contents/Resources/Dicts/
+app: build/Juxu Resources/Info.plist build/AppIcon.icns build/menu_icon.pdf
+	rm -rf build/Juxu.app
+	mkdir -p build/Juxu.app/Contents/MacOS \
+	         build/Juxu.app/Contents/Resources/Dicts \
+	         build/Juxu.app/Contents/Resources/zh-Hans.lproj
+	cp build/Juxu build/Juxu.app/Contents/MacOS/Juxu
+	cp Resources/Info.plist build/Juxu.app/Contents/Info.plist
+	cp Resources/zh-Hans.lproj/InfoPlist.strings build/Juxu.app/Contents/Resources/zh-Hans.lproj/InfoPlist.strings
+	cp build/AppIcon.icns build/Juxu.app/Contents/Resources/AppIcon.icns
+	cp build/menu_icon.pdf build/Juxu.app/Contents/Resources/menu_icon.pdf
+	cp Resources/Dicts/*.wbdict Resources/Dicts/*.pydict Resources/Dicts/*.wbaux build/Juxu.app/Contents/Resources/Dicts/
 	@id="$$(sh Scripts/resolve-codesign-identity.sh "$(CODESIGN_IDENTITY)" "$(CERT_NAME)")"; \
-	echo "Signing build/PrisWubi.app with identity: $$id"; \
-	codesign --force --deep --sign "$$id" build/PrisWubi.app
+	echo "Signing build/Juxu.app with identity: $$id"; \
+	codesign --force --deep --sign "$$id" build/Juxu.app
 
 install: app
 	mkdir -p "$$HOME/Library/Input Methods"
+	pkill -TERM -x Juxu || true
 	pkill -TERM -x PrisWubi || true
 	sleep 0.3
-	rm -rf "$$HOME/Library/Input Methods/PrisWubi.app"
-	cp -R build/PrisWubi.app "$$HOME/Library/Input Methods/PrisWubi.app"
-	"$(LSREGISTER)" -f -R -trusted "$$HOME/Library/Input Methods/PrisWubi.app"
-	swift $(MACOS_TARGET) -e 'import Carbon; let u = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Input Methods/PrisWubi.app"); TISRegisterInputSource(u as CFURL)'
+	rm -rf "$$HOME/Library/Input Methods/Juxu.app"
+	cp -R build/Juxu.app "$$HOME/Library/Input Methods/Juxu.app"
+	"$(LSREGISTER)" -f -R -trusted "$$HOME/Library/Input Methods/Juxu.app"
+	swift $(MACOS_TARGET) -e 'import Carbon; let u = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Input Methods/Juxu.app"); TISRegisterInputSource(u as CFURL)'
 	killall imklaunchagent 2>/dev/null || true
 	sleep 0.3
-	open -g "$$HOME/Library/Input Methods/PrisWubi.app"
-	@echo "Installed and launched ~/Library/Input Methods/PrisWubi.app"
+	open -g "$$HOME/Library/Input Methods/Juxu.app"
+	@echo "Installed and launched ~/Library/Input Methods/Juxu.app"
 
 rust-test:
 	cargo test --release --manifest-path Core/Cargo.toml

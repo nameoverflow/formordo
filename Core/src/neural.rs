@@ -369,7 +369,7 @@ pub struct NeuralView<'a> {
 }
 
 /// Compact recurrent state + cached output projections at one position in the sentence.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct RwkvState {
     pub mat_state: Vec<f32>,  // L * H * 32 * 32
     pub prev_tm: Vec<f32>,    // L * D

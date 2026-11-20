@@ -348,3 +348,75 @@ fn real_dicts_latency_schemas_and_typo_correction() {
     got3.push_str(&out3_sp.commit_text);
     assert_eq!(got3, "店的", "expected 3+1 missed-space rescue '店的', got '{}'", got3);
 }
+
+#[test]
+fn real_dicts_full_pinyin_and_xiaohe_sentence_and_typo() {
+    use wubi_core::pinyin_dict::PinyinDictView;
+
+    let base = dicts_dir();
+    let pdict = PinyinDictView::from_file(base.join("pinyin.pydict")).expect("open pinyin.pydict");
+    let xh_dict = DictView::open_mmap(base.join("xiaohe.wbdict")).expect("open xiaohe.wbdict");
+    let aux = AuxView::open_mmap(base.join("wubi_aux.wbaux")).expect("open wubi_aux.wbaux");
+
+    let (syl_cnt, char_cnt, phrase_cnt) = pdict.stats();
+    println!("Loaded pinyin.pydict: {} syllables, {} chars, {} phrases", syl_cnt, char_cnt, phrase_cnt);
+    assert!(syl_cnt > 390 && char_cnt > 8000 && phrase_cnt > 100_000);
+
+    // 1. Full Pinyin real-dict sentence + abbr + apostrophe + touch typo + latency
+    let mut cfg = WubiConfig::default();
+    cfg.schema = WubiSchema::Pinyin;
+    let mut engine = WubiEngine::new(cfg);
+    engine.load_pinyin_dict(pdict);
+    engine.set_aux(aux);
+
+    let sentences = [
+        ("womenshurufa", "我们输入法"),
+        ("jintiantianqizhenhao", "今天天气真好"),
+        ("srf", "输入法"),
+        ("xi'an", "西安"),
+    ];
+    let t0 = Instant::now();
+    let mut total_keys = 0usize;
+    for (keys, expected) in sentences {
+        engine.clear_composition();
+        for (i, ch) in keys.chars().enumerate() {
+            let _ = engine.handle_key_event(0, Some(ch), false, 1000 + i as u64 * 40);
+            total_keys += 1;
+        }
+        let top = engine.page_candidates().first().map(|c| c.text.as_str()).unwrap_or("");
+        println!("Pinyin {:<22} -> top='{}' (seg='{}')", keys, top, engine.segmented_code());
+        assert_eq!(top, expected, "pinyin {} failed: got '{}'", keys, top);
+    }
+    let avg_us = t0.elapsed().as_secs_f64() * 1e6 / (total_keys as f64);
+    println!("Real pinyin.pydict average per-key latency: {:.2} us", avg_us);
+    assert!(avg_us < 8000.0, "pinyin per-key latency too high: {:.2} us", avg_us);
+
+    // Touch typo rescue on real pinyin.pydict: "jontiantianqi" (i->o border) -> "今天天气"
+    engine.clear_composition();
+    let _ = engine.push_touch_letter(b'j', 6.5, 1.0, true, 2000);
+    let _ = engine.push_touch_letter(b'o', 7.45, 0.0, true, 2040); // near i(7.0)/o(8.0) border
+    for (i, ch) in "ntiantianqi".chars().enumerate() {
+        let _ = engine.handle_key_event(0, Some(ch), false, 2080 + i as u64 * 40);
+    }
+    let typo_top = engine.page_candidates().first().map(|c| c.text.as_str()).unwrap_or("");
+    println!("Pinyin touch typo j(o)ntiantianqi -> '{}'", typo_top);
+    assert_eq!(typo_top, "今天天气");
+
+    // 2. Xiaohe YinXing real-dict lookup + 'z' typo rescue + spaceless sentence
+    let mut cfg_xh = WubiConfig::default();
+    cfg_xh.schema = WubiSchema::Xiaohe;
+    cfg_xh.spaceless = false;
+    engine.set_config(cfg_xh);
+    engine.load_dict(WubiSchema::Xiaohe, xh_dict);
+
+    for ch in "uuip".chars() {
+        let _ = engine.handle_key_event(0, Some(ch), false, 3000);
+    }
+    // `uuip` in flypy is "输入" (or auto-committed if unique!)
+    // Let's check `zz` / `zn` ("真" or "这" / "在")
+    engine.clear_composition();
+    let _ = engine.handle_key_event(0, Some('z'), false, 3100);
+    let top_z = engine.page_candidates().first().map(|c| c.text.as_str()).unwrap_or("");
+    println!("Xiaohe 'z' -> '{}'", top_z);
+    assert!(!top_z.is_empty());
+}

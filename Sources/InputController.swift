@@ -2,9 +2,9 @@ import AppKit
 import Carbon
 import InputMethodKit
 
-@objc(PrisWubiInputController)
+@objc(JuxuInputController)
 @MainActor
-public final class PrisWubiInputController: IMKInputController {
+public final class JuxuInputController: IMKInputController {
     private weak var activeClient: (any IMKTextInput & NSObjectProtocol)?
     private var shiftKeyDownAlone: Bool = false
     private var shiftDownTimestamp: TimeInterval = 0
@@ -219,8 +219,20 @@ public final class PrisWubiInputController: IMKInputController {
     // MARK: - Native macOS Input Method Menu
 
     public override func menu() -> NSMenu! {
-        let m = NSMenu(title: "形序")
+        let m = NSMenu(title: "句序")
         let curSchema = WubiBridge.shared.prefs.schemaId
+
+        let itemPy = NSMenuItem(title: "全拼", action: #selector(selectSchemaPinyin(_:)), keyEquivalent: "")
+        itemPy.target = self
+        itemPy.state = (curSchema == 20) ? .on : .off
+        m.addItem(itemPy)
+
+        let itemXh = NSMenuItem(title: "小鹤音形", action: #selector(selectSchemaXiaohe(_:)), keyEquivalent: "")
+        itemXh.target = self
+        itemXh.state = (curSchema == 10) ? .on : .off
+        m.addItem(itemXh)
+
+        m.addItem(.separator())
 
         let item86 = NSMenuItem(title: "86 版五笔", action: #selector(selectSchema86(_:)), keyEquivalent: "")
         item86.target = self
@@ -268,13 +280,21 @@ public final class PrisWubiInputController: IMKInputController {
         m.addItem(.separator())
 
         let prefsItem = NSMenuItem(
-            title: "形序偏好设置…",
+            title: "句序偏好设置…",
             action: #selector(showPreferences(_:)),
             keyEquivalent: ""
         )
         m.addItem(prefsItem)
 
         return m
+    }
+
+    @objc private func selectSchemaPinyin(_ sender: Any?) {
+        WubiBridge.shared.switchSchema(20)
+    }
+
+    @objc private func selectSchemaXiaohe(_ sender: Any?) {
+        WubiBridge.shared.switchSchema(10)
     }
 
     @objc private func selectSchema86(_ sender: Any?) {
