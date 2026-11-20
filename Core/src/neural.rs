@@ -214,6 +214,7 @@ pub struct NeuralLmSummary {
 pub struct NeuralOffsets {
     pub summary: NeuralLmSummary,
     pub tok_to_char: Vec<char>,
+    pub(crate) profile_id: u64,
     lut_off: usize,
     emb_w_off: usize,
     emb_sc_off: usize,
@@ -342,6 +343,10 @@ impl NeuralOffsets {
                 ffn_dim,
             },
             tok_to_char,
+            profile_id: blob.iter().step_by((blob.len() / 64).max(1)).fold(
+                blob.len() as u64,
+                |hash, &byte| (hash ^ byte as u64).wrapping_mul(0x100_0000_01b3),
+            ),
             lut_off,
             emb_w_off,
             emb_sc_off,

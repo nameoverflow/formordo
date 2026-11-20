@@ -3,12 +3,90 @@ use std::time::Instant;
 use wubi_core::config::{WubiConfig, WubiSchema};
 use wubi_core::engine::{CandidateBadge, WubiEngine, KEY_BACKSPACE, KEY_RETURN, KEY_SPACE};
 use wubi_core::format::{AuxView, DictView};
+use wubi_core::user_data::UserStore;
 
 fn dicts_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .join("Resources/Dicts")
+}
+
+#[test]
+fn spaceless_personal_context_generalizes_beyond_the_shared_suffix() {
+    let dir = dicts_dir();
+    if !dir.join("wubi86.wbdict").exists() {
+        return;
+    }
+    let config = WubiConfig {
+        spaceless: true,
+        auto_phrase: false,
+        ..WubiConfig::default()
+    };
+    let mut engine = WubiEngine::new(config.clone());
+    engine.load_dict(
+        WubiSchema::Wubi86,
+        DictView::open_mmap(dir.join("wubi86.wbdict")).unwrap(),
+    );
+    engine.set_aux(AuxView::open_mmap(dir.join("wubi_aux.wbaux")).unwrap());
+    let enter = |engine: &mut WubiEngine, context: &str, code: &str| {
+        engine.clear_composition();
+        engine.set_recent_context(context);
+        for (i, ch) in code.chars().enumerate() {
+            engine.handle_key_event(0, Some(ch), false, 100 + i as u64 * 90);
+        }
+    };
+
+    let legal = "法律团队为了明天的研讨会正在收集";
+    let safety = "安全部门为了明天的检查会正在收集";
+    for context in [legal, safety] {
+        enter(&mut engine, context, "pvwguqou");
+        assert_eq!(engine.preedit(), "安全资料");
+    }
+    for _ in 0..12 {
+        for (context, preferred) in [
+            ("法务团队为了下周的研讨会正在收集", "案例材料"),
+            ("安全团队为了下周的检查会正在收集", "安全材料"),
+        ] {
+            enter(&mut engine, context, "pvwgsfou");
+            let index = engine
+                .all_candidates()
+                .iter()
+                .position(|candidate| candidate.text == preferred)
+                .unwrap();
+            let selected = engine.select_abs_candidate(index, 1_200).unwrap();
+            assert_eq!(selected.commit_text, preferred);
+        }
+    }
+
+    let path = std::env::temp_dir().join(format!("wubi-personal-{}.tsv", std::process::id()));
+    engine.user.save_file(&path).unwrap();
+    engine.user = UserStore::load_file(&path).unwrap();
+
+    // Neither entire prefix nor the "资料" ending was seen during training.
+    // The prefixes share the final four characters, but the RWKV memories differ.
+    for code in ["pvwguqou", "ovwguqou"] {
+        enter(&mut engine, legal, code);
+        assert_eq!(engine.preedit(), "案例资料");
+        assert_eq!(engine.all_candidates()[0].is_exact, code.starts_with('p'));
+        enter(&mut engine, safety, code);
+        assert_eq!(engine.preedit(), "安全资料");
+    }
+
+    // An incompatible neural checkpoint must fall back to the same short statistics.
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.lines().any(|line| line.starts_with("CONT_MODEL\t")));
+    let short_only: String = saved.lines()
+        .filter(|line| !line.starts_with("CONT_MODEL\t"))
+        .flat_map(|line| line.chars().chain(['\n']))
+        .collect();
+    std::fs::write(&path, short_only).unwrap();
+    engine.user = UserStore::load_file(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    for context in [legal, safety] {
+        enter(&mut engine, context, "pvwguqou");
+        assert_eq!(engine.preedit(), "安全资料");
+    }
 }
 
 #[test]

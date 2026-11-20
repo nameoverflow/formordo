@@ -2,6 +2,7 @@ use crate::code::PackedCode;
 use crate::config::WubiConfig;
 use crate::format::{AuxView, DictView};
 use crate::neural::{NeuralView, RwkvState};
+use crate::personalization::Context as PersonalContext;
 use crate::typo::{generate_hypotheses, CorrectionKind, KeyLayout, KeyObs};
 use crate::user_data::UserStore;
 use std::collections::VecDeque;
@@ -41,6 +42,7 @@ pub(crate) struct Path {
     pub score: f32,
     boundaries: Vec<Boundary>,
     state: RwkvState,
+    personal_context: PersonalContext,
 }
 
 impl Path {
@@ -123,6 +125,7 @@ impl Stream {
                 score: 0.0,
                 boundaries: Vec::new(),
                 state: initial.clone(),
+                personal_context: PersonalContext::with_chars(decoder.context.iter().copied()),
             }]);
         }
         for end in self.first + self.layers.len()..=observations.len() {
@@ -263,6 +266,9 @@ impl Stream {
 
         let mut steps = Vec::new();
         let end = observations.len();
+        let personal = &decoder.user.continuations;
+        let personalize = decoder.config.dynamic_word_freq && !personal.is_empty();
+        let use_personal_states = personalize && personal.matches_model(&decoder.model);
         for len in 1..=end.min(MAX_CODE_LEN) {
             let parents = self.layer(end - len);
             if parents.is_empty() {
@@ -306,8 +312,25 @@ impl Stream {
                     let users = decoder.user.lookup_exact(key);
                     let limit = if exact { [1, 2, 4, 6][len - 1] } else { 2 };
                     hits.into_iter()
-                        .take(limit)
                         .enumerate()
+                        .take(if exact && personalize { 24 } else { limit })
+                        .filter(move |(rank, entry)| {
+                            *rank < limit
+                                || parents.iter().any(|parent| {
+                                    let score = personal.score(parent.personal_context, entry.text);
+                                    score >= 0.6
+                                        || (use_personal_states
+                                            && entry.text.chars().next().is_some_and(|first| {
+                                                personal.state_bonus(
+                                                    parent.personal_context,
+                                                    first,
+                                                    &parent.state,
+                                                ) + score
+                                                    >= 0.6
+                                            }))
+                                })
+                        })
+                        .take(limit + 2)
                         .map(|(rank, entry)| (rank, entry.text, entry.weight, false))
                         .chain(
                             users
@@ -372,16 +395,24 @@ impl Stream {
                             contextual_bias += 0.15 * decoder.aux.trigram_boost(prev2, prev, first);
                         }
                     }
+                    if personalize {
+                        contextual_bias += personal.score(parent.personal_context, text);
+                    }
                     let estimate = if n_chars == 1 {
                         decoder.model.score_next_char(&parent.state, first)
                     } else {
                         decoder.model.score_phrase_fast(&parent.state, text)
                             * (n_chars.min(MAX_CODE_LEN) as f32).powf(0.65)
                     };
+                    let personal_estimate = if use_personal_states {
+                        personal.state_bonus(parent.personal_context, first, &parent.state)
+                    } else {
+                        0.0
+                    };
                     steps.push(Step {
                         parent,
                         text,
-                        estimate: parent.score + contextual_bias + estimate,
+                        estimate: parent.score + contextual_bias + estimate + personal_estimate,
                         bias: contextual_bias,
                         code,
                         correction,
@@ -395,11 +426,16 @@ impl Stream {
         for step in steps.into_iter().take(BEAM_WIDTH * 2) {
             let mut state = step.parent.state.clone();
             let mut score = step.parent.score + step.bias;
+            let mut personal_context = step.parent.personal_context;
             for ch in step.text.chars() {
                 score += decoder.model.score_next_char(&state, ch);
+                if use_personal_states {
+                    score += personal.state_bonus(personal_context, ch, &state);
+                }
                 decoder
                     .model
                     .step_token(decoder.model.char_to_token(ch), &mut state);
+                personal_context = personal_context.push(ch);
             }
             let mut text = step.parent.text.clone();
             text.push_str(step.text);
@@ -415,6 +451,7 @@ impl Stream {
                 score,
                 boundaries,
                 state,
+                personal_context,
             };
             if let Some(existing) = paths.iter_mut().find(|p| p.text == path.text) {
                 if path.score > existing.score {

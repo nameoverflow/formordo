@@ -840,7 +840,19 @@ impl WubiEngine {
     }
 
     pub fn select_abs_candidate(&mut self, abs_idx: usize, timestamp_ms: u64) -> Option<EngineOutput> {
+        self.commit_candidate(abs_idx, timestamp_ms, true)
+    }
+
+    fn commit_candidate(
+        &mut self,
+        abs_idx: usize,
+        timestamp_ms: u64,
+        explicit: bool,
+    ) -> Option<EngineOutput> {
         let cand = self.candidates.get(abs_idx)?.clone();
+        let learn = self.config.dynamic_word_freq && (explicit || cand.is_exact);
+        let first_choice =
+            (learn && explicit && abs_idx > 0).then(|| self.candidates[0].text.clone());
         let mut notice = String::new();
         let commit_text = if self.uses_spaceless() {
             let segments = if cand.matched_code.is_empty() {
@@ -860,8 +872,16 @@ impl WubiEngine {
                 });
                 segments
             };
+            if learn {
+                let selected: String =
+                    segments.iter().map(|segment| segment.text.as_str()).collect();
+                self.learn_continuation(&selected, explicit, first_choice.as_deref());
+            }
             self.finalize_stream_segments(segments, true, timestamp_ms, &mut notice)
         } else {
+            if learn {
+                self.learn_continuation(&cand.text, explicit, first_choice.as_deref());
+            }
             self.finalize_commit(&cand.text, Some(cand.matched_code), timestamp_ms, &mut notice);
             cand.text
         };
@@ -1194,7 +1214,7 @@ impl WubiEngine {
             let mut out = if self.uses_spaceless() {
                 self.finish_spaceless(timestamp_ms)
             } else {
-                self.select_abs_candidate(0, timestamp_ms)
+                self.commit_candidate(0, timestamp_ms, false)
                     .unwrap_or_else(|| {
                         self.clear_composition();
                         EngineOutput::default()
@@ -1267,12 +1287,7 @@ impl WubiEngine {
                 let mut notice = String::new();
                 if !self.raw_code.is_empty() {
                     if let Some(first) = self.candidates.first().cloned() {
-                        self.finalize_commit(
-                            &first.text,
-                            Some(first.matched_code),
-                            timestamp_ms,
-                            &mut notice,
-                        );
+                        self.finalize_automatic_candidate(&first, timestamp_ms, &mut notice);
                         text.push_str(&first.text);
                     }
                     self.clear_composition();
@@ -1321,17 +1336,7 @@ impl WubiEngine {
                     resolved_via_fifth_split = true;
                 } else {
                     if let Some(first) = self.candidates.first().cloned() {
-                        let matched = if first.matched_code.is_empty() {
-                            None
-                        } else {
-                            Some(first.matched_code)
-                        };
-                        self.finalize_commit(
-                            &first.text,
-                            matched,
-                            obs.timestamp_ms,
-                            &mut notice,
-                        );
+                        self.finalize_automatic_candidate(&first, obs.timestamp_ms, &mut notice);
                         commit_prefix.push_str(&first.text);
                     }
                     self.clear_composition();
@@ -1412,17 +1417,7 @@ impl WubiEngine {
                 }
             } else if self.config.fourth_code_auto_commit && self.should_auto_commit_fourth() {
                 let first = self.candidates[0].clone();
-                let matched = if first.matched_code.is_empty() {
-                    None
-                } else {
-                    Some(first.matched_code)
-                };
-                self.finalize_commit(
-                    &first.text,
-                    matched,
-                    obs.timestamp_ms,
-                    &mut notice,
-                );
+                self.finalize_automatic_candidate(&first, obs.timestamp_ms, &mut notice);
                 commit_prefix.push_str(&first.text);
                 self.clear_composition();
                 return EngineOutput {
@@ -1590,7 +1585,7 @@ impl WubiEngine {
     }
 
     fn finish_spaceless(&mut self, timestamp_ms: u64) -> EngineOutput {
-        if let Some(out) = self.select_abs_candidate(0, timestamp_ms) {
+        if let Some(out) = self.commit_candidate(0, timestamp_ms, false) {
             return out;
         }
         let text = self.preedit();
@@ -1615,6 +1610,9 @@ impl WubiEngine {
         let mut start = 0;
         for segment in segments {
             let end = start + segment.code.len();
+            if !confirmed_by_user && segment.correction == CorrectionKind::Exact {
+                self.learn_continuation(&segment.text, false, None);
+            }
             if segment.correction == CorrectionKind::Exact
                 || (confirmed_by_user && segment.correction != CorrectionKind::Transposition)
             {
@@ -1625,6 +1623,38 @@ impl WubiEngine {
             start = end;
         }
         text
+    }
+
+    fn learn_continuation(&mut self, text: &str, explicit: bool, first_choice: Option<&str>) {
+        if !self.config.dynamic_word_freq {
+            return;
+        }
+        let neural = self
+            .aux
+            .as_ref()
+            .and_then(|aux| aux.neural_view())
+            .filter(|_| self.neural_tracker.is_ready())
+            .map(|view| (view, self.neural_tracker.active.clone()));
+        self.user.continuations.observe(
+            &self.recent_context,
+            text,
+            explicit,
+            first_choice,
+            neural,
+        );
+    }
+
+    fn finalize_automatic_candidate(
+        &mut self,
+        candidate: &Candidate,
+        timestamp_ms: u64,
+        notice: &mut String,
+    ) {
+        if candidate.is_exact {
+            self.learn_continuation(&candidate.text, false, None);
+        }
+        let code = (!candidate.matched_code.is_empty()).then_some(candidate.matched_code);
+        self.finalize_commit(&candidate.text, code, timestamp_ms, notice);
     }
 
     fn learn_touch_offsets(&mut self, code: PackedCode, range: std::ops::Range<usize>) {

@@ -1,9 +1,15 @@
 use crate::code::PackedCode;
 use crate::format::DictView;
+use crate::personalization::PersonalContinuations;
 use std::collections::HashMap;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static USER_DATA_WRITE_ID: AtomicU64 = AtomicU64::new(0);
 
 pub const MAX_TOUCH_OFFSET: f32 = 0.20; // Clamp adaptive hitbox shift to ±0.20 key-pitch
 
@@ -79,6 +85,7 @@ pub struct UserStore {
     pub unigram_counts: HashMap<String, u32>,
     pub word_bigrams: HashMap<(String, String), u32>,
     pub char_bigrams: HashMap<(char, char), u32>,
+    pub(crate) continuations: PersonalContinuations,
     pub touch_profile: TouchProfile,
     /// Rolling buffer of recent consecutive single-char commits `(ch, timestamp_ms)`
     recent_singles: Vec<(char, u64)>,
@@ -96,6 +103,7 @@ impl Default for UserStore {
             unigram_counts: HashMap::new(),
             word_bigrams: HashMap::new(),
             char_bigrams: HashMap::new(),
+            continuations: PersonalContinuations::default(),
             touch_profile: TouchProfile::default(),
             recent_singles: Vec::new(),
             pending_ngrams: HashMap::new(),
@@ -424,7 +432,8 @@ impl UserStore {
     }
 
     pub fn save_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
-        if let Some(parent) = path.as_ref().parent() {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         let mut out = String::from("# PrisWubi User Data v1\n");
@@ -464,7 +473,21 @@ impl UserStore {
                 c
             ));
         }
-        fs::write(path, out)
+        self.continuations.write_to(&mut out);
+        let write_id = USER_DATA_WRITE_ID.fetch_add(1, Ordering::Relaxed);
+        let temporary_path = path.with_extension(format!("tmp.{}.{write_id}", std::process::id()));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&temporary_path)?;
+        let result = file.write_all(out.as_bytes());
+        drop(file);
+        let result = result.and_then(|()| fs::rename(&temporary_path, path));
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary_path);
+        }
+        result
     }
 
     pub fn load_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
@@ -524,6 +547,9 @@ impl UserStore {
                         store.word_bigrams.insert((p, n), c);
                     }
                 }
+                "CONT_SEQ" if parts.len() == 2 => store.continuations.load_clock(parts[1]),
+                "CONT_MODEL" if parts.len() == 2 => store.continuations.load_model(parts[1]),
+                "CONT" => store.continuations.load_row(&parts[1..]),
                 _ => {}
             }
         }
