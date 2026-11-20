@@ -408,6 +408,7 @@ final class PrisWubiSimulatorUITests: XCTestCase {
 
         try typeCodes("rstaqkdrjfwh")
         let keyboardWidth = canvas.frame.width
+        attachShot(name: "code-strip-short")
         expand.tap()
         XCTAssertTrue(first.waitForExistence(timeout: 5))
         XCTAssertEqual(first.label, "打长句的时候")
@@ -416,6 +417,16 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         app.buttons["重输"].tap()
 
         try typeCodes("tvqqiepbdggtebjfddwpukwdedgxbtudcakftdgdcgwgdc")
+        let codeStrip = app.staticTexts["PrisWubiSegmentedCode"]
+        XCTAssertTrue(codeStrip.exists)
+        XCTAssertGreaterThanOrEqual(codeStrip.frame.minX, canvas.frame.minX + 16)
+        XCTAssertLessThanOrEqual(codeStrip.frame.maxX, canvas.frame.maxX - 16)
+        XCTAssertLessThan(codeStrip.frame.maxY, canvas.frame.minY)
+        let latestCodes = codeStrip.screenshot().pngRepresentation
+        attachShot(name: "code-strip-long")
+        codeStrip.swipeRight()
+        XCTAssertNotEqual(codeStrip.screenshot().pngRepresentation, latestCodes)
+        attachShot(name: "code-strip-pan")
         expand.tap()
         XCTAssertTrue(first.waitForExistence(timeout: 5))
         XCTAssertEqual(first.label, "常用字在五笔里其实只有三级简码或者三码全码")

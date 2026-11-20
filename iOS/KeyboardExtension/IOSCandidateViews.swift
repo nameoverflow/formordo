@@ -197,6 +197,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     var onDismissClipboard: ((IOSClipboardSuggestion) -> Void)?
     var onTapChevron: (() -> Void)?
 
+    private let codeStrip = IOSCodeStripView()
     private let clipContainer = UIView()
     private let contentTrack = UIView()
     private let edgeFadeMask = CAGradientLayer()
@@ -297,15 +298,6 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         contentTrack.backgroundColor = .clear
         clipContainer.addSubview(contentTrack)
 
-        codeClip.clipsToBounds = true
-        codeClip.isHidden = true
-        codeLabel.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
-        codeLabel.accessibilityIdentifier = "PrisWubiSegmentedCode"
-        codeClip.addSubview(codeLabel)
-        let codePan = UIPanGestureRecognizer(target: self, action: #selector(handleCodePan(_:)))
-        codePan.delegate = self
-        codeClip.addGestureRecognizer(codePan)
-
         edgeFadeMask.colors = [
             UIColor.black.cgColor,
             UIColor.black.cgColor,
@@ -338,7 +330,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         clipboardDismissBtn.addTarget(self, action: #selector(handleClipboardDismiss), for: .touchUpInside)
 
         addSubview(clipContainer)
-        addSubview(codeClip)
+        addSubview(codeStrip)
         addSubview(chevronBtn)
         addSubview(clipboardPill)
         addSubview(clipboardDismissBtn)
@@ -365,33 +357,17 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
-        if pan.view === codeClip {
-            let velocity = pan.velocity(in: codeClip)
-            return maxCodeOffset > 0 && abs(velocity.x) > abs(velocity.y)
-        }
         guard contentWidth > clipContainer.bounds.width + 2.0 else { return false }
         let vel = pan.velocity(in: clipContainer)
         return abs(vel.x) > abs(vel.y) * 1.2
     }
 
-    private let codeClip = UIView()
-    private let codeLabel = UILabel()
     private var candidatesTop: NSLayoutConstraint!
     private var chevronTop: NSLayoutConstraint!
-    private var codeOffset: CGFloat?
-    private var codePanStart: CGFloat = 0
 
-    private var maxCodeOffset: CGFloat {
-        max(0, codeLabel.intrinsicContentSize.width - codeClip.bounds.width)
-    }
-
-    @objc private func handleCodePan(_ pan: UIPanGestureRecognizer) {
-        if pan.state == .began {
-            codePanStart = codeOffset ?? maxCodeOffset
-        } else if pan.state == .changed {
-            codeOffset = min(maxCodeOffset, max(0, codePanStart - pan.translation(in: codeClip).x))
-            setNeedsLayout()
-        }
+    private var codeBandHeight: CGFloat {
+        guard !codeStrip.isHidden else { return 0 }
+        return bounds.height > 0 && bounds.height < 46 ? 18 : 23
     }
 
     @objc private func handleHorizontalPan(_ pan: UIPanGestureRecognizer) {
@@ -432,17 +408,17 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        if !codeClip.isHidden {
-            codeClip.frame = CGRect(x: 10, y: 0, width: max(0, bounds.width - 20), height: 16)
-            codeLabel.frame = CGRect(
-                x: -min(codeOffset ?? maxCodeOffset, maxCodeOffset),
-                y: 0,
-                width: max(codeClip.bounds.width, codeLabel.intrinsicContentSize.width),
-                height: codeClip.bounds.height
-            )
+        let codeHeight = codeBandHeight
+        if candidatesTop.constant != codeHeight {
+            candidatesTop.constant = codeHeight
+            chevronTop.constant = codeHeight
+        }
+        if !codeStrip.isHidden {
+            let topInset: CGFloat = codeHeight == 18 ? 2 : 4
+            codeStrip.frame = CGRect(x: 16, y: topInset, width: max(0, bounds.width - 32), height: codeHeight - topInset - 1)
         }
         let barH = clipContainer.bounds.height
-        let slotH = codeClip.isHidden ? min(34.0, max(28.0, barH - 10.0)) : min(34.0, barH)
+        let slotH = codeStrip.isHidden ? min(34.0, max(28.0, barH - 10.0)) : min(34.0, barH)
         let slotY = floor((barH - slotH) * 0.5)
 
         // Layout centered native clipboard pill when visible (keeping bottom >= 8pt clear for Row 0 q..p)
@@ -569,7 +545,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         let resolvedIdleWords = idleWords ?? Self.starterWords
         if lastPreeditEmpty == isEmpty,
            lastDark == dark,
-           codeLabel.text == state.segmentedCode,
+           codeStrip.text == state.segmentedCode,
            activeClipboardSuggestion == effectiveClipboard,
            (isEmpty ? lastIdleWords == resolvedIdleWords : lastCandidates == state.candidates) {
             return
@@ -582,15 +558,9 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
         let textCol: UIColor = dark ? .white : .black
         let subtleCol: UIColor = dark ? UIColor(white: 0.64, alpha: 1.0) : UIColor(white: 0.44, alpha: 1.0)
-        if codeLabel.text != state.segmentedCode {
-            codeLabel.text = state.segmentedCode
-            codeOffset = nil
-        }
-        codeLabel.textColor = subtleCol
-        codeClip.isHidden = state.segmentedCode.isEmpty
-        let codeHeight: CGFloat = codeClip.isHidden ? 0 : 16
-        candidatesTop.constant = codeHeight
-        chevronTop.constant = codeHeight
+        codeStrip.update(text: state.segmentedCode, dark: dark)
+        candidatesTop.constant = codeBandHeight
+        chevronTop.constant = codeBandHeight
         chevronBtn.tintColor = textCol
         chevronBtn.isHidden = isEmpty
         clipTrailingToChevron.isActive = !isEmpty
@@ -686,6 +656,120 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     @objc private func handleClipboardDismiss() {
         guard let suggestion = activeClipboardSuggestion else { return }
         onDismissClipboard?(suggestion)
+    }
+}
+
+@MainActor
+private final class IOSCodeStripView: UIView, UIGestureRecognizerDelegate {
+    private(set) var text = ""
+    private let viewport = UIView()
+    private let label = UILabel()
+    private let fade = CAGradientLayer()
+    private var offset: CGFloat?
+    private var panStart: CGFloat = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        layer.cornerRadius = 5
+        layer.cornerCurve = .continuous
+        clipsToBounds = true
+        isHidden = true
+        isAccessibilityElement = true
+        accessibilityTraits = .staticText
+        accessibilityIdentifier = "PrisWubiSegmentedCode"
+        viewport.clipsToBounds = true
+        label.isAccessibilityElement = false
+        viewport.addSubview(label)
+        addSubview(viewport)
+
+        fade.startPoint = CGPoint(x: 0, y: 0.5)
+        fade.endPoint = CGPoint(x: 1, y: 0.5)
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        pan.delegate = self
+        addGestureRecognizer(pan)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(text: String, dark: Bool) {
+        if self.text != text {
+            self.text = text
+            offset = nil
+        }
+        accessibilityLabel = text
+        isHidden = text.isEmpty
+        if isHidden {
+            label.attributedText = nil
+            return
+        }
+
+        backgroundColor = UIColor(white: dark ? 1 : 0, alpha: dark ? 0.08 : 0.048)
+        let activeColor = UIColor(white: dark ? 0.96 : 0.16, alpha: 1)
+        let previousColor = UIColor(white: dark ? 0.70 : 0.39, alpha: 1)
+        let separatorColor = UIColor(white: dark ? 0.58 : 0.50, alpha: 1)
+        let regular = UIFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
+        let styled = NSMutableAttributedString(string: text, attributes: [
+            .font: UIFont.monospacedSystemFont(ofSize: 12.5, weight: .medium),
+            .foregroundColor: activeColor,
+        ])
+        let boundary = (text as NSString).range(of: " │ ")
+        if boundary.location != NSNotFound {
+            styled.addAttributes([.font: regular, .foregroundColor: previousColor],
+                                 range: NSRange(location: 0, length: boundary.location))
+            styled.addAttributes([.font: regular, .foregroundColor: separatorColor], range: boundary)
+        }
+        for (index, unit) in text.utf16.enumerated() where unit == 0x00B7 {
+            styled.addAttributes([.font: regular, .foregroundColor: separatorColor], range: NSRange(location: index, length: 1))
+        }
+        label.attributedText = styled
+        setNeedsLayout()
+    }
+
+    private var maxOffset: CGFloat {
+        max(0, ceil(label.intrinsicContentSize.width) - viewport.bounds.width)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        viewport.frame = bounds.insetBy(dx: 6, dy: 0)
+        let current = min(offset ?? maxOffset, maxOffset)
+        label.frame = CGRect(x: -current, y: 0, width: ceil(label.intrinsicContentSize.width), height: viewport.bounds.height)
+
+        let fadeLeft = current > 0.5
+        let fadeRight = maxOffset - current > 0.5
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if (fadeLeft || fadeRight) && viewport.bounds.width > 0 {
+            let edge = Double(min(12 / viewport.bounds.width, 0.5))
+            let solid = UIColor.black.cgColor
+            let clear = UIColor.clear.cgColor
+            fade.frame = viewport.bounds
+            fade.colors = [fadeLeft ? clear : solid, solid, solid, fadeRight ? clear : solid]
+            fade.locations = [0, NSNumber(value: edge), NSNumber(value: 1 - edge), 1]
+            if viewport.layer.mask !== fade {
+                viewport.layer.mask = fade
+            }
+        } else {
+            viewport.layer.mask = nil
+        }
+        CATransaction.commit()
+    }
+
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer, maxOffset > 0 else { return false }
+        let velocity = pan.velocity(in: self)
+        return abs(velocity.x) > abs(velocity.y)
+    }
+
+    @objc private func handlePan(_ pan: UIPanGestureRecognizer) {
+        if pan.state == .began {
+            panStart = min(offset ?? maxOffset, maxOffset)
+        } else if pan.state == .changed {
+            offset = min(maxOffset, max(0, panStart - pan.translation(in: self).x))
+            setNeedsLayout()
+        }
     }
 }
 
