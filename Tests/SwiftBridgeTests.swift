@@ -89,9 +89,14 @@ struct SwiftBridgeTests {
         let punct = bridge.handleKey(keyCode: 0, scalar: 46, hasCmdOrCtrl: false, timestampMs: 504)
         assert(punct.commitText == "去吃饭吧。" && punct.preedit.isEmpty)
         assert(punct.segmentedCode.isEmpty)
-        _ = bridge.handleKey(keyCode: 0, scalar: 113, hasCmdOrCtrl: false, timestampMs: 505)
-        let enter = bridge.handleKey(keyCode: 0x24, scalar: 13, hasCmdOrCtrl: false, timestampMs: 506)
-        assert(enter.commitText == "我" && enter.preedit.isEmpty)
+        for enterKey: UInt16 in [0x24, 0x4c] {
+            for key in "hello".unicodeScalars {
+                let state = bridge.handleKey(keyCode: 0, scalar: key.value, hasCmdOrCtrl: false, timestampMs: 505)
+                assert(state.commitText.isEmpty)
+            }
+            let enter = bridge.handleKey(keyCode: enterKey, scalar: 13, hasCmdOrCtrl: false, timestampMs: 506)
+            assert(enter.commitText == "hello" && enter.preedit.isEmpty && enter.segmentedCode.isEmpty)
+        }
         for key in "qbh".unicodeScalars {
             _ = bridge.handleKey(keyCode: 0, scalar: key.value, hasCmdOrCtrl: false, timestampMs: 507)
         }

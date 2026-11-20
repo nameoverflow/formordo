@@ -1110,12 +1110,6 @@ impl WubiEngine {
                     self.clear_context();
                     return EngineOutput::default();
                 }
-                if self.uses_spaceless() {
-                    let out = self.finish_spaceless(timestamp_ms);
-                    self.user.break_single_burst();
-                    self.clear_context();
-                    return out;
-                }
                 let raw = self.raw_code.clone();
                 self.clear_composition();
                 self.user.break_single_burst();

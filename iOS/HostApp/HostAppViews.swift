@@ -268,7 +268,7 @@ public struct IOSHostRootView: View {
                     .background(iosCardBackground)
 
                     VStack(spacing: 12) {
-                        iosToggleRow("流式无空格连打（实验）", sub: "连续输入词组和简码，按标点或回车确认句尾", isOn: binding(\.spaceless))
+                        iosToggleRow("流式无空格连打（实验）", sub: "连续输入词组和简码。标点确认中文，回车输入原始字母", isOn: binding(\.spaceless))
                         Divider()
                         iosToggleRow("最短编码（简码）优先", sub: "1–3 码简码始终排在补全项之前", isOn: binding(\.shortestCodeFirst))
                         Divider()

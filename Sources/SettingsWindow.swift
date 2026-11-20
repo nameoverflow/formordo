@@ -190,7 +190,7 @@ public struct SettingsRootView: View {
                 VStack(spacing: 11) {
                     toggleRow(
                         title: "流式无空格连打（实验）",
-                        subtitle: "连续输入词组和简码，按标点或回车确认句尾",
+                        subtitle: "连续输入词组和简码。标点确认中文，回车输入原始字母",
                         isOn: binding(\.spaceless)
                     )
                     Divider()

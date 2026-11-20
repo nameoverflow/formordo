@@ -287,20 +287,29 @@ final class PrisWubiSimulatorUITests: XCTestCase {
         XCTAssertTrue(canvas.waitForExistence(timeout: 5))
         let origin = canvas.coordinate(withNormalizedOffset: .zero)
         let layout = IOSKeyboardLayoutEngine().computeLayout(in: canvas.frame.size)
+        func tap(_ kind: IOSKeyKind) throws {
+            let key = try XCTUnwrap(layout.keys.first { $0.kind == kind })
+            origin.withOffset(CGVector(dx: key.frame.midX, dy: key.frame.midY)).tap()
+        }
         let target = "今天天气真好我们一起去吃饭吧"
         for letter in "wygdgdrtfhvbtrwuggfhfcuktqnkc".utf8 {
-            let key = try XCTUnwrap(layout.keys.first { $0.kind == .letter(letter) })
-            origin.withOffset(CGVector(dx: key.frame.midX, dy: key.frame.midY)).tap()
+            try tap(.letter(letter))
         }
         XCTAssertEqual(field.value as? String, target)
         let segmented = typingApp.staticTexts["PrisWubiSegmentedCode"]
         XCTAssertTrue(segmented.exists)
         XCTAssertTrue(segmented.label.hasSuffix("│ fcu·ktqn·kc"))
         attachShot(name: "spaceless-98-composing")
-        let enter = try XCTUnwrap(layout.keys.first { $0.kind == .returnKey })
-        origin.withOffset(CGVector(dx: enter.frame.midX, dy: enter.frame.midY)).tap()
+        typingApp.staticTexts["去吃饭吧"].tap()
         XCTAssertEqual(field.value as? String, target)
         attachShot(name: "spaceless-98-confirmed")
+        for letter in "hello".utf8 {
+            try tap(.letter(letter))
+        }
+        try tap(.returnKey)
+        XCTAssertEqual(field.value as? String, target + " hello")
+        XCTAssertFalse(segmented.exists)
+        attachShot(name: "spaceless-98-return-english")
         app.launch()
         app.tabBars.buttons["输入设置"].tap()
         for label in ["流式无空格连打（实验）", "出简不出全"] where app.switches[label].value as? String == "1" {
