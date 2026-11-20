@@ -81,6 +81,7 @@ struct SwiftBridgeTests {
         committed += afterLast.commitText
         assert(committed == "今天天气真好我们一起")
         assert(afterLast.preedit == "去吃饭吧")
+        assert(afterLast.macOSPreedit == "fcu·ktqn·kc")
         assert(afterLast.segmentedCode.hasSuffix("│ fcu·ktqn·kc"))
         assert(afterLast.segmentedCode.filter(\.isLetter) == codes)
         assert(afterLast.candidates.contains { $0.text == "吧" })
@@ -247,11 +248,10 @@ struct SwiftBridgeTests {
         candidateView.state = bridge.state
         candidateView.frame.size = candidateView.computeFittingSize()
         candidateView.layout()
-        let codeLabel = candidateView.subviews.compactMap { $0 as? NSTextField }.first!
-        assert(bridge.state.preedit == "我感觉" && codeLabel.stringValue == "q·dgip")
-        assert(candidateView.frame.height == 49 && codeLabel.frame.maxY <= 19)
+        assert(bridge.state.preedit == "我感觉" && bridge.state.macOSPreedit == "q·dgip")
+        assert(candidateView.frame.height == 30 && candidateView.subviews.isEmpty)
         candidateView.state = narrowState
-        assert(codeLabel.isHidden && candidateView.computeFittingSize().height == 30)
+        assert(narrowState.macOSPreedit == "g")
 
         print("✓ All Swift <-> Rust C ABI bridge, pure-AppKit non-wrapping candidate bar & Bayesian typo tests passed!")
     }

@@ -154,7 +154,8 @@ public final class PrisWubiInputController: IMKInputController {
             WubiBridge.shared.flushUserDataIfNeeded()
         }
 
-        if out.preedit.isEmpty {
+        let markedText = out.macOSPreedit
+        if markedText.isEmpty {
             if out.commitText.isEmpty {
                 client?.setMarkedText(
                     "",
@@ -165,14 +166,14 @@ public final class PrisWubiInputController: IMKInputController {
             CandidatePanelController.shared.hide()
         } else {
             let attr = NSAttributedString(
-                string: out.preedit,
+                string: markedText,
                 attributes: [
                     .underlineStyle: NSUnderlineStyle.single.rawValue,
                 ]
             )
             client?.setMarkedText(
                 attr,
-                selectionRange: NSRange(location: out.preedit.utf16.count, length: 0),
+                selectionRange: NSRange(location: markedText.utf16.count, length: 0),
                 replacementRange: NSRange(location: NSNotFound, length: NSNotFound)
             )
             let caret = queryCaretRect(client: client)

@@ -94,6 +94,16 @@ public struct WubiActionState: Codable, Equatable, Sendable {
     public let nextKeyPriors: [UInt8]
     public let candidates: [WubiCandidateItem]
 
+    #if os(macOS)
+    var macOSPreedit: String {
+        guard !segmentedCode.isEmpty else { return preedit }
+        if let boundary = segmentedCode.range(of: " │ ") {
+            return String(segmentedCode[boundary.upperBound...])
+        }
+        return segmentedCode
+    }
+    #endif
+
     public init(
         consumed: Bool,
         bell: Bool,
