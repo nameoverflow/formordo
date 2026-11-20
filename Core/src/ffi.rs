@@ -564,7 +564,7 @@ pub extern "C" fn wubi_engine_all_candidates_json(
     let Some(h) = (unsafe { handle.as_ref() }) else {
         return into_c_string("[]".to_string());
     };
-    let limit = (max_count as usize).clamp(1, 120);
+    let limit = (max_count as usize).clamp(1, 500);
     let mut j = String::from("[");
     for (idx, c) in h.inner.all_candidates().iter().take(limit).enumerate() {
         if idx > 0 {

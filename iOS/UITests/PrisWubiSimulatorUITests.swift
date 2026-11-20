@@ -751,6 +751,33 @@ final class PrisWubiSimulatorUITests: XCTestCase {
     }
 
     @MainActor
+    func testChevronHitAreaAndZPinyinExpandedGrid() throws {
+        let app = openLiveKeyboard()
+        let canvas = app.otherElements["PrisWubiKeyCanvas"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 5))
+        let origin = canvas.coordinate(withNormalizedOffset: .zero)
+        let layout = IOSKeyboardLayoutEngine().computeLayout(in: canvas.frame.size)
+        for letter in "zshi".utf8 {
+            let key = try XCTUnwrap(layout.keys.first { $0.kind == .letter(letter) })
+            origin.withOffset(CGVector(dx: key.frame.midX, dy: key.frame.midY)).tap()
+        }
+
+        let expand = app.buttons["PrisWubiCandidateToggle"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(expand.frame.height, 50.0, "Chevron button should span full candidate bar height")
+        attachShot(name: "z-pinyin-ribbon")
+
+        // Tap chevron button
+        expand.tap()
+
+        let first = app.buttons["PrisWubiExpandedCandidate0"]
+        XCTAssertTrue(first.waitForExistence(timeout: 5), "Tapping upper chevron hit zone must open expanded grid")
+        let beyond36 = app.buttons["PrisWubiExpandedCandidate50"]
+        XCTAssertTrue(beyond36.exists, "Expanded grid must list all z-pinyin candidates beyond the old 36 cap")
+        attachShot(name: "z-pinyin-expanded")
+    }
+
+    @MainActor
     private func tapNorm(_ app: XCUIApplication, dx: CGFloat, dy: CGFloat) {
         app.coordinate(withNormalizedOffset: CGVector(dx: dx, dy: dy)).tap()
     }

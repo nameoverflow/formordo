@@ -231,7 +231,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     /// while preserving full hit area on `chevronBtn`, centered clipboard pill, and eliminating inter-slot dead gaps.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard bounds.contains(point) else { return false }
-        if !chevronBtn.isHidden && point.x >= chevronBtn.frame.minX - 4.0 {
+        if !chevronBtn.isHidden && point.x >= chevronBtn.frame.minX - 8.0 {
             return true
         }
         if point.y > bounds.height - 8.0 {
@@ -264,6 +264,9 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
+        if !chevronBtn.isHidden && bounds.contains(point) && point.x >= chevronBtn.frame.minX - 8.0 {
+            return chevronBtn
+        }
         if !clipboardPill.isHidden {
             if !clipboardDismissBtn.isHidden && clipboardDismissBtn.frame.insetBy(dx: -6.0, dy: -4.0).contains(point) {
                 return clipboardDismissBtn
@@ -272,7 +275,7 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
                 return clipboardPill
             }
         }
-        if hit === clipContainer || hit === contentTrack {
+        if hit === clipContainer || hit === contentTrack || (hit === self && codeStrip.isHidden && point.y >= 12.0) {
             let trackPt = convert(point, to: contentTrack)
             var nearestSlot: IOSRibbonSlotControl?
             var bestDx = CGFloat.greatestFiniteMagnitude
@@ -338,7 +341,6 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         clipTrailingToChevron = clipContainer.trailingAnchor.constraint(equalTo: chevronBtn.leadingAnchor)
         clipTrailingToFull = clipContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6)
         candidatesTop = clipContainer.topAnchor.constraint(equalTo: topAnchor)
-        chevronTop = chevronBtn.topAnchor.constraint(equalTo: topAnchor)
 
         NSLayoutConstraint.activate([
             clipContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -346,10 +348,10 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
             candidatesTop,
             clipContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            chevronBtn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            chevronTop,
+            chevronBtn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+            chevronBtn.topAnchor.constraint(equalTo: topAnchor),
             chevronBtn.bottomAnchor.constraint(equalTo: bottomAnchor),
-            chevronBtn.widthAnchor.constraint(equalToConstant: 42),
+            chevronBtn.widthAnchor.constraint(equalToConstant: 46),
         ])
 
         ensureSlotCapacity(10)
@@ -363,11 +365,9 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
     }
 
     private var candidatesTop: NSLayoutConstraint!
-    private var chevronTop: NSLayoutConstraint!
 
     private var codeBandHeight: CGFloat {
-        guard !codeStrip.isHidden else { return 0 }
-        return bounds.height > 0 && bounds.height < 46 ? 18 : 23
+        bounds.height > 0 && bounds.height < 46 ? 18 : 23
     }
 
     @objc private func handleHorizontalPan(_ pan: UIPanGestureRecognizer) {
@@ -411,14 +411,17 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         let codeHeight = codeBandHeight
         if candidatesTop.constant != codeHeight {
             candidatesTop.constant = codeHeight
-            chevronTop.constant = codeHeight
+        }
+        let targetInsets = UIEdgeInsets(top: codeHeight, left: 0, bottom: 0, right: 0)
+        if chevronBtn.imageEdgeInsets != targetInsets {
+            chevronBtn.imageEdgeInsets = targetInsets
         }
         if !codeStrip.isHidden {
             let topInset: CGFloat = codeHeight == 18 ? 2 : 4
             codeStrip.frame = CGRect(x: 16, y: topInset, width: max(0, bounds.width - 32), height: codeHeight - topInset - 1)
         }
         let barH = clipContainer.bounds.height
-        let slotH = codeStrip.isHidden ? min(34.0, max(28.0, barH - 10.0)) : min(34.0, barH)
+        let slotH = min(34.0, barH)
         let slotY = floor((barH - slotH) * 0.5)
 
         // Layout centered native clipboard pill when visible (keeping bottom >= 8pt clear for Row 0 q..p)
@@ -560,7 +563,6 @@ final class IOSCandidateRibbonView: UIView, UIGestureRecognizerDelegate {
         let subtleCol: UIColor = dark ? UIColor(white: 0.64, alpha: 1.0) : UIColor(white: 0.44, alpha: 1.0)
         codeStrip.update(text: state.segmentedCode, dark: dark)
         candidatesTop.constant = codeBandHeight
-        chevronTop.constant = codeBandHeight
         chevronBtn.tintColor = textCol
         chevronBtn.isHidden = isEmpty
         clipTrailingToChevron.isActive = !isEmpty
@@ -883,10 +885,11 @@ final class IOSExpandedCandidateView: UIView {
             compact.removeAll(keepingCapacity: true)
         }
         for (index, item) in candidates.enumerated() {
+            let hint = Self.displayHint(for: item)
             let textWidth = (item.text as NSString).size(withAttributes: [.font: candidateFont]).width
             let fullWidth = textWidth > cellWidth - 2 * textInset || item.text.contains("\n")
             let button = makeCandidateButton(
-                text: item.text, index: index, width: fullWidth ? width : cellWidth, fullWidth: fullWidth
+                text: item.text, hint: hint, index: index, width: fullWidth ? width : cellWidth, fullWidth: fullWidth
             )
             if fullWidth {
                 flushCompactRow()
@@ -901,7 +904,19 @@ final class IOSExpandedCandidateView: UIView {
         flushCompactRow()
     }
 
-    private func makeCandidateButton(text: String, index: Int, width: CGFloat, fullWidth: Bool) -> UIButton {
+    private static func displayHint(for item: WubiCandidateItem) -> String? {
+        guard !item.comment.isEmpty else { return nil }
+        switch item.badgeKind {
+        case .pinyinLookup, .shortcode:
+            return item.comment
+        case .typoCorrected:
+            return item.comment.components(separatedBy: " ").first ?? item.comment
+        default:
+            return nil
+        }
+    }
+
+    private func makeCandidateButton(text: String, hint: String?, index: Int, width: CGFloat, fullWidth: Bool) -> UIButton {
         let button = UIButton(type: .system)
         button.backgroundColor = dark ? UIColor(white: 1.0, alpha: 0.175) : .white
         button.layer.cornerRadius = IOSKeyboardLayoutEngine.keyCornerRadius
@@ -923,13 +938,43 @@ final class IOSExpandedCandidateView: UIView {
         let availableWidth = max(1, width - 2 * textInset)
         let textHeight = ceil(label.sizeThatFits(CGSize(width: availableWidth, height: .greatestFiniteMagnitude)).height)
         button.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: textInset),
-            label.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -textInset),
-            label.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            label.heightAnchor.constraint(equalToConstant: textHeight),
-            button.heightAnchor.constraint(equalToConstant: max(45, textHeight + 16)),
-        ])
+
+        if let hint {
+            let hintLabel = UILabel()
+            hintLabel.translatesAutoresizingMaskIntoConstraints = false
+            hintLabel.text = hint
+            hintLabel.textColor = dark ? UIColor(white: 0.72, alpha: 1.0) : UIColor(white: 0.42, alpha: 1.0)
+            hintLabel.font = .systemFont(ofSize: 10.0, weight: .regular)
+            hintLabel.textAlignment = fullWidth ? .natural : .center
+            hintLabel.lineBreakMode = .byTruncatingMiddle
+            hintLabel.adjustsFontSizeToFitWidth = true
+            hintLabel.minimumScaleFactor = 0.72
+            hintLabel.numberOfLines = 1
+            hintLabel.isAccessibilityElement = false
+            let hintHeight = ceil(hintLabel.font.lineHeight)
+            let spacing: CGFloat = 1.0
+            let totalContentH = textHeight + spacing + hintHeight
+            button.addSubview(hintLabel)
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: textInset),
+                label.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -textInset),
+                label.centerYAnchor.constraint(equalTo: button.centerYAnchor, constant: -(hintHeight + spacing) * 0.5),
+                label.heightAnchor.constraint(equalToConstant: textHeight),
+                hintLabel.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 4),
+                hintLabel.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -4),
+                hintLabel.topAnchor.constraint(equalTo: label.bottomAnchor, constant: spacing),
+                hintLabel.heightAnchor.constraint(equalToConstant: hintHeight),
+                button.heightAnchor.constraint(equalToConstant: max(48, totalContentH + 12)),
+            ])
+        } else {
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: textInset),
+                label.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -textInset),
+                label.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                label.heightAnchor.constraint(equalToConstant: textHeight),
+                button.heightAnchor.constraint(equalToConstant: max(45, textHeight + 16)),
+            ])
+        }
         return button
     }
 

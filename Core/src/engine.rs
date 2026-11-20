@@ -1887,7 +1887,7 @@ impl WubiEngine {
         if let Some(ref aux) = self.aux {
             let py_query = &self.raw_code.as_bytes()[1..];
             if !py_query.is_empty() && py_query.len() <= 6 {
-                for (ch, _wt, py_disp, _exact) in aux.lookup_pinyin(py_query, 36) {
+                for (ch, _wt, py_disp, _exact) in aux.lookup_pinyin(py_query, 200) {
                     let s = ch.to_string();
                     if !seen.insert(s.clone()) {
                         continue;

@@ -443,7 +443,7 @@ public final class KeyboardViewController: UIInputViewController {
             let isExp = !self.expandedGrid.isHidden
             self.keyCanvas.isHidden = isExp
             if isExp {
-                self.expandedGrid.reload(candidates: self.bridge.allCandidates(maxCount: 60), dark: self.isDarkAppearance)
+                self.expandedGrid.reload(candidates: self.bridge.allCandidates(maxCount: 300), dark: self.isDarkAppearance)
             }
             self.ribbonView.setExpanded(isExp)
         }
@@ -475,7 +475,7 @@ public final class KeyboardViewController: UIInputViewController {
                     self.keyCanvas.isHidden = false
                     self.ribbonView.setExpanded(false)
                 } else {
-                    self.expandedGrid.reload(candidates: self.bridge.allCandidates(maxCount: 60), dark: self.isDarkAppearance)
+                    self.expandedGrid.reload(candidates: self.bridge.allCandidates(maxCount: 300), dark: self.isDarkAppearance)
                 }
             }
         }
