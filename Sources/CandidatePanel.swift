@@ -4,15 +4,18 @@ import SwiftUI
 
 /// Pure AppKit macOS native candidate view calibrated to Apple InputMethodKit (`16.plist` / `SCIM.app`):
 /// - Strictly single-line CoreText/`NSAttributedString` measurement & drawing: NEVER wraps onto multiple lines.
-/// - No redundant preedit/schema header box (preedit is already marked inline at the cursor like Apple SCIM).
+/// - The inline preedit stays at the cursor. Spaceless mode shows its raw codes above the candidates.
 /// - Clean `32pt` horizontal bar (`24pt` selection rect, `5pt` continuous corner radius, `16pt` PingFang SC Regular,
 ///   `11.5pt` guide digits, whisper-light `11.5pt` secondary code annotations without colored pills).
 public final class NativeCandidateContentView: NSView {
     public var state: WubiActionState = .empty {
         didSet {
             hoveredCandidateIndex = nil
-            toolTip = state.segmentedCode.isEmpty ? nil : state.segmentedCode
+            codeLabel.stringValue = state.segmentedCode
+            codeLabel.isHidden = state.segmentedCode.isEmpty
+            codeLabel.toolTip = codeLabel.isHidden ? nil : state.segmentedCode
             invalidateIntrinsicContentSize()
+            needsLayout = true
             needsDisplay = true
         }
     }
@@ -37,12 +40,23 @@ public final class NativeCandidateContentView: NSView {
     private var dividerRect: NSRect = .zero
     private var hoveredCandidateIndex: Int?
     private var trackingAreaRef: NSTrackingArea?
+    private let codeLabel = NSTextField(labelWithString: "")
+
+    private var codeRowHeight: CGFloat {
+        codeLabel.isHidden ? 0 : 19
+    }
 
     public override var isFlipped: Bool { true }
 
     public override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        codeLabel.font = .monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        codeLabel.textColor = .secondaryLabelColor
+        codeLabel.lineBreakMode = .byTruncatingHead
+        codeLabel.maximumNumberOfLines = 1
+        codeLabel.isHidden = true
+        addSubview(codeLabel)
     }
 
     public required init?(coder: NSCoder) {
@@ -68,9 +82,8 @@ public final class NativeCandidateContentView: NSView {
 
     public func computeFittingSize() -> NSSize {
         var size = state.vertical ? computeVerticalLayout(apply: false) : computeHorizontalLayout(apply: false)
-        if !state.segmentedCode.isEmpty {
-            size.width = max(size.width, min(maxAllowedWidth, ceil(segmentedCodeText.size().width + 20)))
-            size.height += 18
+        if !codeLabel.isHidden {
+            size.width = max(size.width, min(maxAllowedWidth, ceil(codeLabel.intrinsicContentSize.width + 20)))
         }
         return size
     }
@@ -81,6 +94,9 @@ public final class NativeCandidateContentView: NSView {
 
     public override func layout() {
         super.layout()
+        if !codeLabel.isHidden {
+            codeLabel.frame = NSRect(x: 10, y: 3, width: max(0, bounds.width - 20), height: codeRowHeight - 3)
+        }
         if state.vertical {
             _ = computeVerticalLayout(apply: true)
         } else {
@@ -103,16 +119,6 @@ public final class NativeCandidateContentView: NSView {
         case .userPhrase, .none:
             return ""
         }
-    }
-
-    private var segmentedCodeText: NSAttributedString {
-        let style = NSMutableParagraphStyle()
-        style.lineBreakMode = .byTruncatingHead
-        return NSAttributedString(string: state.segmentedCode, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular),
-            .foregroundColor: NSColor.secondaryLabelColor,
-            .paragraphStyle: style,
-        ])
     }
 
     private func makeSingleLineTruncated(_ text: String, font: NSFont, color: NSColor, maxWidth: CGFloat) -> NSAttributedString {
@@ -145,7 +151,7 @@ public final class NativeCandidateContentView: NSView {
         // Total height: 30pt, concentric outer inset: 3pt X / 3pt Y (outer radius 8pt, inner selection radius 5pt, pill height 24pt)
         let barHeight: CGFloat = 30.0
         let outerX: CGFloat = 3.0
-        let pillY: CGFloat = 3.0
+        let pillY = codeRowHeight + 3.0
         let pillH: CGFloat = 24.0
         let cellPadLeft: CGFloat = 7.5
         let cellPadRight: CGFloat = 8.0
@@ -180,7 +186,7 @@ public final class NativeCandidateContentView: NSView {
                         numberAttr: NSAttributedString(string: ""),
                         numberOrigin: .zero,
                         textAttr: emptyAttr,
-                        textOrigin: NSPoint(x: outerX + cellPadLeft, y: round((barHeight - sz.height) * 0.5)),
+                        textOrigin: NSPoint(x: outerX + cellPadLeft, y: codeRowHeight + round((barHeight - sz.height) * 0.5)),
                         noteAttr: nil,
                         noteOrigin: .zero
                     )
@@ -189,7 +195,7 @@ public final class NativeCandidateContentView: NSView {
                 prevPageRect = .zero
                 nextPageRect = .zero
             }
-            return NSSize(width: w, height: barHeight)
+            return NSSize(width: w, height: codeRowHeight + barHeight)
         }
 
         for (idx, item) in state.candidates.enumerated() {
@@ -225,7 +231,7 @@ public final class NativeCandidateContentView: NSView {
             }
 
             let cellRect = NSRect(x: cursorX, y: pillY, width: cellW, height: pillH)
-            let txtY = (barHeight - txtSize.height) * 0.5 - 0.5
+            let txtY = codeRowHeight + (barHeight - txtSize.height) * 0.5 - 0.5
             // Align baselines of index digit and annotation with the 16pt PingFang SC candidate text
             let baselineY = txtY + textFont.ascender
             let numY = baselineY - numFont.ascender
@@ -258,7 +264,7 @@ public final class NativeCandidateContentView: NSView {
 
         if hasPager {
             cursorX += 3.5
-            divR = NSRect(x: cursorX, y: 8.0, width: 0.5, height: 14.0)
+            divR = NSRect(x: cursorX, y: codeRowHeight + 8.0, width: 0.5, height: 14.0)
             cursorX += 3.0
             prevR = NSRect(x: cursorX, y: pillY, width: 15.0, height: pillH)
             cursorX += 15.0
@@ -273,7 +279,7 @@ public final class NativeCandidateContentView: NSView {
             prevPageRect = prevR
             nextPageRect = nextR
         }
-        return NSSize(width: max(64.0, totalW), height: barHeight)
+        return NSSize(width: max(64.0, totalW), height: codeRowHeight + barHeight)
     }
 
     private func computeVerticalLayout(apply: Bool) -> NSSize {
@@ -317,7 +323,7 @@ public final class NativeCandidateContentView: NSView {
 
         let totalW = ceil(maxRowW + outerX * 2.0)
         var layouts: [CellLayout] = []
-        var cursorY = outerY
+        var cursorY = codeRowHeight + outerY
 
         for (idx, entry) in rawItems.enumerated() {
             let rect = NSRect(x: outerX, y: cursorY, width: maxRowW, height: rowH)
@@ -381,10 +387,6 @@ public final class NativeCandidateContentView: NSView {
 
     public override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        if !state.segmentedCode.isEmpty {
-            segmentedCodeText.draw(with: NSRect(x: 10, y: bounds.height - 17, width: bounds.width - 20, height: 15),
-                                   options: [.truncatesLastVisibleLine])
-        }
         for cell in cellLayouts {
             if cell.relIndex == 0 {
                 let path = NSBezierPath(roundedRect: cell.rect, xRadius: 5.0, yRadius: 5.0)

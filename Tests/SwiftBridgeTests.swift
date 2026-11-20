@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 @main
 struct SwiftBridgeTests {
@@ -234,6 +234,19 @@ struct SwiftBridgeTests {
         let sz2 = candidateView.computeFittingSize()
         assert(sz2.height == 30.0, "Expected strictly single-line 30pt height without wrapping, got \(sz2.height)")
         assert(sz2.width > sz1.width + 200.0, "Expected horizontal candidate bar to expand cleanly on single line")
+
+        bridge.setContext("")
+        for key in "qdgip".unicodeScalars {
+            _ = bridge.handleKey(keyCode: 0, scalar: key.value, hasCmdOrCtrl: false, timestampMs: 600)
+        }
+        candidateView.state = bridge.state
+        candidateView.frame.size = candidateView.computeFittingSize()
+        candidateView.layout()
+        let codeLabel = candidateView.subviews.compactMap { $0 as? NSTextField }.first!
+        assert(bridge.state.preedit == "我感觉" && codeLabel.stringValue == "q·dgip")
+        assert(candidateView.frame.height == 49 && codeLabel.frame.maxY <= 19)
+        candidateView.state = narrowState
+        assert(codeLabel.isHidden && candidateView.computeFittingSize().height == 30)
 
         print("✓ All Swift <-> Rust C ABI bridge, pure-AppKit non-wrapping candidate bar & Bayesian typo tests passed!")
     }
