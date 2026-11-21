@@ -299,12 +299,17 @@ fn build_lattice(
                     }
                 };
                 if let Some(sid) = decoder.dict.lookup_syllable_id(&s) {
+                    let full_cost = if correction == CorrectionKind::Exact {
+                        1.35 * ((end - start) as f32)
+                    } else {
+                        typo_cost
+                    };
                     edges_by_end[actual_end].push(LatticeEdge {
                         start,
                         end: actual_end,
                         syl: SylMatch::Full(sid),
                         spatial_logp,
-                        kind_cost: typo_cost,
+                        kind_cost: full_cost,
                         correction,
                         display_syl: s,
                     });
@@ -571,8 +576,13 @@ fn extend_pinyin_layer(
                     SylMatch::Prefix(p) => SylConstraint::Prefix(p.as_str()),
                 })
                 .collect();
-            for e in decoder.dict.lookup_phrases(&constraints, 24) {
-                entries.push((e.text.to_owned(), e.weight));
+            for (rank, e) in decoder.dict.lookup_phrases(&constraints, 200).into_iter().enumerate() {
+                if rank < 48
+                    || (decoder.config.dynamic_word_freq
+                        && decoder.user.unigram_boost(e.text) > 0.0)
+                {
+                    entries.push((e.text.to_owned(), e.weight));
+                }
             }
         }
 
@@ -736,6 +746,99 @@ fn build_pinyin_candidates(
         }
     }
 
+    // 1b. If `n <= 6` (e.g. initial abbr `sjb` / `shenjb` or 2-3 char word), also surface extra matching phrases
+    //     beyond `BEAM_WIDTH = 8` so lower-ranked exact/abbr words like `神经病` are always reachable & learnable.
+    if n <= 6 {
+        let mut extra_phrases: Vec<(String, f32)> = Vec::new();
+        // Check 2..=4 syllable chains ending at `n` starting at `0`
+        let mut full_chains: Vec<Vec<&LatticeEdge>> = lattice[n]
+            .iter()
+            .filter(|e| e.correction == CorrectionKind::Exact)
+            .take(4)
+            .map(|e| vec![e])
+            .collect();
+        for _k in 2..=MAX_PHRASE_SYLS {
+            let mut next_f = Vec::new();
+            for ch in &full_chains {
+                let hs = ch.last().unwrap().start;
+                if hs == 0 {
+                    let mut rev = ch.clone();
+                    rev.reverse();
+                    let constraints: Vec<SylConstraint<'_>> = rev
+                        .iter()
+                        .map(|e| match &e.syl {
+                            SylMatch::Full(sid) => SylConstraint::Full(*sid),
+                            SylMatch::Initial(id, dg) => SylConstraint::Initial(*id, *dg),
+                            SylMatch::Prefix(p) => SylConstraint::Prefix(p.as_str()),
+                        })
+                        .collect();
+                    for e in decoder.dict.lookup_phrases(&constraints, 80) {
+                        let mut sc = 0.42 * (((e.weight as f32) + 1.0).ln() - 8.5);
+                        if decoder.config.dynamic_word_freq {
+                            sc += 1.6 * decoder.user.unigram_boost(e.text);
+                        }
+                        extra_phrases.push((e.text.to_owned(), sc));
+                    }
+                    continue;
+                }
+                for pe in lattice[hs]
+                    .iter()
+                    .filter(|e| e.correction == CorrectionKind::Exact)
+                    .take(3)
+                {
+                    let mut nc = ch.clone();
+                    nc.push(pe);
+                    next_f.push(nc);
+                }
+            }
+            if next_f.is_empty() {
+                break;
+            }
+            full_chains = next_f;
+        }
+        for ch in &full_chains {
+            if ch.last().unwrap().start == 0 {
+                let mut rev = ch.clone();
+                rev.reverse();
+                let constraints: Vec<SylConstraint<'_>> = rev
+                    .iter()
+                    .map(|e| match &e.syl {
+                        SylMatch::Full(sid) => SylConstraint::Full(*sid),
+                        SylMatch::Initial(id, dg) => SylConstraint::Initial(*id, *dg),
+                        SylMatch::Prefix(p) => SylConstraint::Prefix(p.as_str()),
+                    })
+                    .collect();
+                for e in decoder.dict.lookup_phrases(&constraints, 80) {
+                    let mut sc = 0.42 * (((e.weight as f32) + 1.0).ln() - 8.5);
+                    if decoder.config.dynamic_word_freq {
+                        sc += 1.6 * decoder.user.unigram_boost(e.text);
+                    }
+                    extra_phrases.push((e.text.to_owned(), sc));
+                }
+            }
+        }
+        extra_phrases.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        for (text, _) in extra_phrases {
+            if seen.insert(text.clone()) {
+                out.push(PinyinCandidate {
+                    candidate: Candidate {
+                        text,
+                        matched_code: PackedCode::EMPTY,
+                        comment: String::new(),
+                        badge: CandidateBadge::None,
+                        confidence: 0.10,
+                        is_exact: true,
+                    },
+                    consumed_keys: n,
+                    boundaries: Vec::new(),
+                });
+                if out.len() >= 48 {
+                    break;
+                }
+            }
+        }
+    }
+
     // 2. Prefix word & single-char candidates at the start of the buffer (so user can select a prefix word)
     let mut prefix_items: Vec<(String, usize, f32, bool, String)> = Vec::new();
     for end in (1..n).rev() {
@@ -779,8 +882,21 @@ fn build_pinyin_candidates(
             }
         }
     }
-    // Single-char candidates at position 0 (including up to 80 homophones so rare/daily chars like 橘 are always reachable!)
-    for edge in lattice.iter().flatten().filter(|e| e.start == 0).take(4) {
+    // Single-char candidates at position 0: prioritize longest exact Full syllables first (e.g. `jian` in `jianpin` before `jia`/`ji`)
+    let mut head_full_edges: Vec<&LatticeEdge> = Vec::new();
+    for end in (1..=n).rev() {
+        for edge in &lattice[end] {
+            if edge.start == 0 && matches!(edge.syl, SylMatch::Full(_)) {
+                head_full_edges.push(edge);
+            }
+        }
+    }
+    head_full_edges.sort_by(|a, b| {
+        (a.correction != CorrectionKind::Exact)
+            .cmp(&(b.correction != CorrectionKind::Exact))
+            .then_with(|| b.end.cmp(&a.end))
+    });
+    for edge in head_full_edges.into_iter().take(3) {
         if let SylMatch::Full(sid) = edge.syl {
             let syl_s = decoder.dict.syllable_str(sid);
             for e in decoder

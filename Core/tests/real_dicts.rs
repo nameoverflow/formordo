@@ -448,6 +448,40 @@ fn real_dicts_full_pinyin_and_xiaohe_sentence_and_typo() {
         );
     }
 
+    // Verify shenjingbing, sjb, shenjb, jiandan, and jianpin->简
+    for (keys, expected_top) in [
+        ("shenjingbing", "神经病"),
+        ("jiandan", "简单"),
+    ] {
+        engine.clear_composition();
+        for ch in keys.chars() {
+            let _ = engine.handle_key_event(0, Some(ch), false, 2700);
+        }
+        let top = &engine.page_candidates()[0];
+        println!("Pinyin exact '{}' -> '{}' (seg='{}')", keys, top.text, engine.segmented_code());
+        assert_eq!(top.text, expected_top);
+    }
+    for keys in ["sjb", "shenjb"] {
+        engine.clear_composition();
+        for ch in keys.chars() {
+            let _ = engine.handle_key_event(0, Some(ch), false, 2800);
+        }
+        assert!(
+            engine.all_candidates().iter().any(|c| c.text == "神经病"),
+            "expected '{}' candidates to include '神经病', got {:?}",
+            keys,
+            engine.page_candidates().iter().map(|c| &c.text).collect::<Vec<_>>()
+        );
+    }
+    engine.clear_composition();
+    for ch in "jianpin".chars() {
+        let _ = engine.handle_key_event(0, Some(ch), false, 2900);
+    }
+    assert!(
+        engine.all_candidates().iter().any(|c| c.text == "简"),
+        "expected 'jianpin' candidates to include '简'"
+    );
+
     // 2. Xiaohe YinXing real-dict lookup + 'z' typo rescue + spaceless sentence
     let mut cfg_xh = WubiConfig::default();
     cfg_xh.schema = WubiSchema::Xiaohe;
